@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "cd tests && node --inspect iris"
   },
   "repository": {
     "type": "git",
@@ -17,7 +17,8 @@
   },
   "homepage": "https://github.com/Graphnull/nodleten#readme",
   "dependencies": {
-    "bson": "^4.4.0",
+    "@tensorflow/tfjs-core": "^3.7.0",
+    "@tensorflow/tfjs-data": "^3.7.0",
     "lz4": "^0.6.5"
   }
 }
