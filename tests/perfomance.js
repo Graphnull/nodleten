@@ -9,7 +9,7 @@ async function trainModel() {
   let time = new Date();
   const xArray = [];
  const yArray = [];
- for(let i=0;i!==6000;i++){
+ for(let i=0;i!==300;i++){
   //xArray.forEach((el)=>{
   //  xDataset.push(el)
   //})
@@ -46,10 +46,10 @@ async function trainModel() {
   console.log('time', new Date()-time);
 }
 {
-  const xDataset = new Dataset({struct:[[inpSize]]})
-  const yDataset = new Dataset({struct:[[1]]})
+  const xDataset = new Dataset({shape:[inpSize]})
+  const yDataset = new Dataset({shape:[1]})
   let time = new Date();
-  for(let i=0;i!==6000;i++){
+  for(let i=0;i!==300;i++){
   //xArray.forEach((el)=>{
   //  xDataset.push(el)
   //})

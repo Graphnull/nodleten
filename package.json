@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "cd tests && node --inspect iris"
+    "test": "cd tests && node write-read && node perfomance"
   },
   "repository": {
     "type": "git",
