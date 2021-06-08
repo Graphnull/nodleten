@@ -1,8 +1,9 @@
 
 let fsPromises = require('fs').promises
+let fs = require('fs')
 let tfData = require('@tensorflow/tfjs-data');
 let tfCore = require('@tensorflow/tfjs-core');
-var lz4 = require('lz4');
+let lz4 = require('lz4');
 const {
     Worker, isMainThread, parentPort, workerData
 } = require('worker_threads');
@@ -10,6 +11,7 @@ const {
 let uniqueId = 0;
 
 const FLOAT32TYPE = 2;
+
 if(isMainThread){
  
 let uniqueCommandId =0;
@@ -18,9 +20,8 @@ class Dataset extends tfData.Dataset {
         super();
         let workerData = params;
         workerData.name = params.name||(uniqueId++);
-        workerData.headerFile = (this.name)+'.ndlt'
         workerData.dataFile = (this.name)+'.bin'
-        workerData.struct = params.struct;
+        this.shape = workerData.shape = params.shape;
         
         workerData.compressLevel= typeof params.compressLevel ==='number'?params.compressLevel:1;
 
@@ -56,13 +57,51 @@ class Dataset extends tfData.Dataset {
         })
         return result;
     }
+    async forEachAsync(func){
+        await this.fileOpen;
+
+        for(let i=0;i!== this.list.length;i++){
+
+            let out = await this.get(this.list[i]);
+            
+            tfCore.tidy(()=>{
+                func(tfCore.tensor(out));
+            })
+        }
+        
+    }
+    async writeHeaderFile(){
+        let commandId = uniqueCommandId++;
+        this.worker.postMessage({id:commandId,op:'writeHeaderFile'})
+        let result = await new Promise((res)=>{
+            let onMessage = (message)=>{
+                if(message.id === commandId){
+                    this.worker.off('message', onMessage)
+                    res(message.data)
+                }
+            }
+            this.worker.on('message', onMessage)
+
+        })
+        return result;
+    }
+    destroy(){
+        this.worker.terminate();
+    }
 }
 class Zip {
     constructor(datasets){
         
         this.datasets = datasets;
         this.firstDataset = Object.values(datasets)[0]
-        this.keys = Object.keys(datasets)
+        this.keys = Object.keys(datasets);
+        this.tensorBuffers = {};
+
+        this.prefetches ={};
+        this.keys.forEach(key=>{
+            this.prefetches[key] = [];
+            this.tensorBuffers[key] = tfCore.buffer([1].concat(this.datasets[key].shape));
+        })
     }
     batch (){throw new Error('not implemented')}
     concatenate (){throw new Error('not implemented')}
@@ -84,7 +123,7 @@ class Zip {
 
             for(let k=0;k!== this.keys.length;k++){
                 let key = this.keys[k];
-                out[key] = await this.datasets[key].get(i);
+                out[key] = await this.datasets[key].get(this.datasets[key].list[i]);
             }
             
             tfCore.tidy(()=>{
@@ -113,16 +152,64 @@ class Zip {
                 i++;
                 let out = {}
 
+                let getingDatas = this.keys.map(async key=>{
+
+                    //check prefetch data
+                    let prefetchLine = this.prefetches[key];
+                    let prefetch = prefetchLine.find(prefetch=>prefetch.i === this.datasets[key].list[i])
+                    
+                    if(prefetch){
+                        if(prefetch.data){
+                            out[key] = prefetch.data;
+                        }else{
+                            out[key] = await prefetch.promise;
+                        }
+                    }else{
+                            out[key] = await this.datasets[key].get(this.datasets[key].list[i]);
+                    }
+                })
+                await Promise.all(getingDatas);
+
+                const prefetchSize = 9;
+                //start prefetch for all datasets
                 for(let k=0;k!== this.keys.length;k++){
                     let key = this.keys[k];
-                    out[key] = await this.datasets[key].get(this.datasets[key].list[i]);
+
+                    let ids = this.datasets[key].list.slice(i+1,i+1+prefetchSize);
+                    
+                    this.prefetches[key] = this.prefetches[key].filter(prefetch=>{
+                        let prefetchExist = ids.findIndex(id=>id===prefetch.i);
+                        if(prefetchExist>-1){
+                            ids[prefetchExist]=-1;
+                        }
+                        return prefetchExist>-1;
+                    })
+                    ids=ids.filter(id=>id!==-1)
+
+                    for(let ni=0;ni!==ids.length;ni++){
+                        let i = ids[ni];
+                        let prefetch = {}
+                        let promise = this.datasets[key].get(i)
+                        .then(data=>{
+                            return prefetch.data=data;
+                        })
+                        prefetch.promise = promise;
+                        prefetch.i = i;
+
+                        this.prefetches[key].push(prefetch)
+                    }
+                    
+                }
+
+                for(let k=0;k!== this.keys.length;k++){
+                    let key = this.keys[k];
+                    this.tensorBuffers[key].values = out[key]
+                    out[key] = this.tensorBuffers[key].toTensor();
                     
                 }
                 
-                for(let k=0;k!== this.keys.length;k++){
-                    let key = this.keys[k];
-                    out[key] = tfCore.tensor(out[key],[1, out[key].length]);
-                }
+                
+
                 return {value:out,done:false};
             }
         }
@@ -138,26 +225,56 @@ module.exports.zip = zip;
 module.exports.Dataset = Dataset;
 }else{
 //const {performance} = require('perf_hooks');
-    const inspector = require('inspector');
+//      const inspector = require('inspector');
     
-const session = new inspector.Session();
-session.connect()
+//  const session = new inspector.Session();
 
-session.post('Profiler.enable', () => {
-    session.post('Profiler.start', () => {})
-})
+
+//  setTimeout(()=>{
+//     const fd = fs.openSync('profile.heapsnapshot', 'w');
+
+//     session.connect();
+    
+//     session.on('HeapProfiler.addHeapSnapshotChunk', (m) => {
+//       fs.writeSync(fd, m.params.chunk);
+//     });
+    
+//     session.post('HeapProfiler.takeHeapSnapshot', null, (err, r) => {
+//       console.log('HeapProfiler.takeHeapSnapshot done:', err, r);
+//       session.disconnect();
+//       fs.closeSync(fd);
+//     });
+//  },10000)
+
+
+// rss: 2123,
+// heapTotal: 9,
+// heapUsed: 6,
+// external: 1635,
+// arrayBuffers: 1630
+
+
+// rss: 101,
+// heapTotal: 7,
+// heapUsed: 5,
+// external: 21,
+// arrayBuffers: 20
+
+// session.post('Profiler.enable', () => {
+//     session.post('Profiler.start', () => {})
+// })
 class Dataset {
     constructor(params={}){
         this.name = params.name||(uniqueId++);
         this.dataFile = (this.name)+'.bin'
-        this.struct = params.struct;
+        this.shape = params.shape;
         
         this.compressLevel= typeof params.compressLevel ==='number'?params.compressLevel:1;
 
-        this.f =null;// file with dataset
+        this.f = null;// file with dataset
 
         this._p = 0;//file position
-        this._computeStrict(this.struct);
+        this._computeStrict();
 
         this.fileOpen = fsPromises.open(this.dataFile, 'a+').then((f)=>{
             this.f = f;
@@ -171,36 +288,46 @@ class Dataset {
        
         this.writeQueue=[];
     }
-    writeHeaderFile (){
+    async writeHeaderFile (){
 
-        //TODO
         let headerFile = (this.name)+'.ndlt'
-        let magicSymbol = Buffer.from('ndlt')
-        let structSerialized = Buffer.from(JSON.stringify(this.struct));
-        let header = Buffer.concat([magicSymbol,Buffer.from(new Uint32Array([structSerialized.length])),structSerialized, Buffer.from([this.compressLevel,0,0,0,0])]);
+        let f = fs.createWriteStream(headerFile);
 
-        this._hp+=header.length;
+        let magicSymbol = Buffer.from('ndlt')
+        let shapeSerialized = Buffer.from(JSON.stringify(this.shape));
+        let header = Buffer.concat([magicSymbol,Buffer.from(new Uint32Array([shapeSerialized.length])),shapeSerialized, Buffer.from([this.compressLevel,0,0,0,0])]);
+        f.write(header);
+
+        for(let i=0;i!==this.list.length;i++){
+            let dataInfo = this.list[i]
+            f.write(Buffer.from(dataInfo.buffer,dataInfo.byteOffset,dataInfo.byteLength))
+        }
+        f.end();
+        await new Promise((res)=>{
+            f.on('finish',res)
+        })
+        
     }
     _computeStrict(){
-        if(!Array.isArray(this.struct)){
-            throw new Error('Struct field not array');
+        if(!Array.isArray(this.shape)){
+            throw new Error('Shape field not array');
         }
 
         let len = 0;
 
-        this.struct.forEach(shape=>{
-            if(!Array.isArray(shape)){
+        let shape = this.shape
+        if(!Array.isArray(shape)){
+            throw new Error(JSON.stringify(shape)+' shape is not number array');
+        }
+        shape.forEach(dim=>{
+            if(typeof dim !=='number'){
                 throw new Error(JSON.stringify(shape)+' shape is not number array');
             }
-            shape.forEach(dim=>{
-                if(typeof dim !=='number'){
-                    throw new Error(JSON.stringify(shape)+' shape is not number array');
-                }
-                len+=dim|0
-            })
+            len+=dim|0
         })
+        
         this.buf = new Float32Array(len);
-        this.compressBuf = Buffer.alloc((len*4)*2);//Buffer.alloc(lz4.encodeBound(len*4));
+        this.compressBuf = Buffer.alloc(lz4.encodeBound(len*4*1.5));//Buffer.alloc(lz4.encodeBound(len*4));
         this.decompressBuf = Buffer.alloc(this.compressBuf.length);
     }
 
@@ -221,65 +348,74 @@ class Dataset {
             throw new Error('Data not found')
         }
 
-        // let offset = 0;
-        // Object.keys(objs).forEach(key=>{
-        //     let data = objs[key];
-        //     if(!Array.isArray(data)){
-        //         throw new Error(JSON.stringify(data)+key+' data is not array');
-        //     }
-
-        //     data.forEach(arr=>{
-        //         if(!(data instanceof Float32Array)){
-        //             throw new Error(JSON.stringify(arr)+key+' data is not Float32Array');
-        //         }
-        //     })
-        //     this.buf.set(arr, offset);
-        //     offset+=arr.length;
-        // })
  
         let offset = 0;
         let data = objs;
 
-      
-        
-        this.buf.set(data, offset);
+        let  length = lz4.encodeBlock(Buffer.from(data.buffer,data.byteOffset, data.byteLength), this.compressBuf)
 
-        let time = new Date();
-        var compressedSize = lz4.encodeBlock(Buffer.from(this.buf.buffer, this.buf.byteOffset, this.buf.byteLength), this.compressBuf)
-
-        if(compressedSize>this.compressBuf.length){
-            throw new Error(`compressBuf.length (${this.compressBuf.length})<compressedSize (${compressedSize})`)
+        if(length>this.compressBuf.length){
+            throw new Error(`compressBuf.length (${this.compressBuf.length})<compressedSize (${length})`)
         }
 
-        let cloned = this.compressBuf.slice(0)
-        offset+=compressedSize;
+        let cloned = Uint8Array.prototype.slice.call(this.compressBuf, 0, length)
 
         let p = this._p;
-        let length = compressedSize
         this._p+=length;
 
         let dataInfo = new BigUint64Array([BigInt(p), BigInt(length), BigInt(FLOAT32TYPE), 0n]);
         
         this.list.push(dataInfo);
 
-        this._p+=length;
         let writeData = Buffer.from(cloned.buffer, cloned.byteOffset, length);
         this.queue[p]={writeData}
 
-        // let writeQueueLength = 0;
-        // this.writeQueue.forEach((data)=>{
-        //     writeQueueLength+=data;
-        // })
-        // if((writeQueueLength+writeData.length)>(1024*1024*4)){
+
+        let writeQueueLength = 0;
+        this.writeQueue.forEach((data)=>{
+            writeQueueLength+=data.length;
+        })
+
+        //TODO batch write
+        if(true){
             await this.fileOpen;
             let writing = this.f.write(writeData, 0, length, p);
-            //let writing = this.f.write(Buffer.concat(this.writeQueue.concat([writeData])), 0, length, p);
             await writing;
-            this.queue=[];
-        //}
+            delete this.queue[p];
+        }else{
+            let writeQueueLength = 0;
+            
+            this.writeQueue.forEach((data)=>{
+                writeQueueLength+=data.length;
+            })
+            console.log('writeQueueLength: ', writeQueueLength);
+            if((writeQueueLength+writeData.length)>(1024*1024*4)){
+                await this.fileOpen;
+                let writing = this.f.write(Buffer.concat(this.writeQueue.concat([writeData])), 0, writeQueueLength+writeData.length, p)//TODO, //TODO);
+                await writing;
+                Object.keys(this.queue).forEach((key)=>{
+                    delete this.queue[key];
+                })
+                this.queue={};
+                this.writeQueue=[];
+            }else{
+                this.writeQueue.push(writeData)
+            }
+        }
       
 
 
+    }
+    async sync(){
+
+        await this.fileOpen;
+        let promises = Object.keys(this.queue).map(_p=>{
+            let p = Number(_p);
+            let data = this.queue[_p].writeData
+            return this.f.write(data, 0, data.length, p);
+        })
+        await Promise.all(promises)
+        this.queue=[];
     }
     async get(dataInfo){
         
@@ -287,18 +423,17 @@ class Dataset {
         let p = Number(dataInfo[0]);
         let len = Number(dataInfo[1]);
         let out = Buffer.from(this.buf.buffer, this.buf.byteOffset, this.buf.byteLength);
-        var uncompressedSize = 0;
+        let uncompressedSize = 0;
         if(this.queue[p]){
             let writeData = this.queue[p].writeData;
             uncompressedSize = lz4.decodeBlock(writeData, out)
         }else{
-            let copy = this.decompressBuf.slice(0);
-            await this.f.read(copy, 0, len, p);
-            uncompressedSize = lz4.decodeBlock(copy.subarray(0,len), out)
+            await this.f.read(this.decompressBuf, 0, len, p);
+            uncompressedSize = lz4.decodeBlock(this.decompressBuf.subarray(0,len), out)
         }
 
         if(uncompressedSize !== this.buf.byteLength){
-            console.log(p, len,this.decompressBuf.length );
+            console.log(p, len,this.decompressBuf.length, this.queue[p]);
             throw new Error(`uncompressedSize (${uncompressedSize}) !== this.buf.byteLength (${this.buf.byteLength})`)
         }
 
@@ -339,22 +474,10 @@ let dataset = new Dataset(workerData);
 let time = null;
 let startMark = null;
 let endMark = null;
-parentPort.on('message', (message) => {
+parentPort.on('message', async (message) => {
     switch(message.op){
         case('get'):{
             if(time){
-                //endMark = performance.mark('first')
-                async function mark1(){
-                    await new Promise((res)=>setTimeout(res,100))
-                    session.post('Profiler.stop', (err, { profile }) => {
-                    
-                    // Write profile to disk, upload, etc.
-                    if (!err) {
-                        fsPromises.writeFile('./profile2.cpuprofile', JSON.stringify(profile));
-                    }
-                });
-                }
-                mark1()
             
                 console.log('first', new Date()-time);
                 time = null;
@@ -365,9 +488,10 @@ parentPort.on('message', (message) => {
                 throw new Error(`data in ${message.index} index not found`)
             }
             
-            dataset.get(dataInfo).then((data)=>{
-                parentPort.postMessage({id:message.id,data});
-            })
+            let data = await dataset.get(dataInfo)
+
+            parentPort.postMessage({id:message.id,data});
+            
         break;
         }
         case('push'):{// push
@@ -377,6 +501,16 @@ parentPort.on('message', (message) => {
             //parentPort.postMessage(message);
             break;
         }
+        case('writeHeaderFile'):{
+            await dataset.sync();
+            await dataset.writeHeaderFile();
+            parentPort.postMessage({id:message.id});
+            break;
+        }
+        default:{
+            throw new Error('unknown command: '+message.op);
+        }
     }
   });
 }
+
