@@ -59,19 +59,29 @@ async function test() {
         throw new Error('test.ndlt file small')
     }
     console.log('success')
-    dataset.destroy();
+    dataset.destroy(true);
 
     var normalDataset;
     try{
-        normalDataset = new Dataset({name:'normal', shape:[768, 1024,3]});
-        await normalDataset.push(new Float32Array(10))
+        normalDataset = new Dataset({name:'normal',type:'Uint8Array', shape:[768, 1024,3]});
+        await normalDataset.push(new Uint8Array(10))
         throw new Error('not')
     }catch(err){
         if(err.message==='not'){
             throw new Error('Not acceptable lenght')
         }
     }
-    normalDataset.destroy()
+    try{
+        await normalDataset.push(new Float32Array(768*1024*3))
+        throw new Error('not')
+    }catch(err){
+        if(err.message==='not'){
+            throw new Error('Not acceptable lenght')
+        }
+    }
+    await normalDataset.push(Buffer.alloc(768*1024*3));
+
+    normalDataset.destroy(true)
 }
 test().catch(err => {
     console.error(err);

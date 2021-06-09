@@ -22,9 +22,9 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.zip = exports.Dataset = void 0;
 const tfCore = __importStar(require("@tensorflow/tfjs-core"));
 const path = __importStar(require("path"));
+const fs = __importStar(require("fs"));
 const worker_threads_1 = require("worker_threads");
 let uniqueId = 0;
-const FLOAT32TYPE = 2;
 let uniqueCommandId = 0;
 /**
  * Create a Dataset with disk cache
@@ -44,8 +44,19 @@ class Dataset {
         let workerData = params || {};
         workerData.name = params.name || String(uniqueId++);
         this.name = workerData.name;
-        this.shape = workerData.shape = params.shape;
-        this.shape.forEach(size => this.inputSize *= size);
+        this.dataFile = (this.name) + '.bin';
+        let shape = params.shape;
+        if (!Array.isArray(shape)) {
+            throw new Error(JSON.stringify(shape) + ' shape is not number array');
+        }
+        shape.forEach(dim => {
+            if (typeof dim !== 'number') {
+                throw new Error(JSON.stringify(shape) + ' shape is not number array');
+            }
+            this.inputSize *= dim;
+        });
+        this.shape = workerData.shape = shape;
+        this.type = workerData.type = params.type || 'Float32Array';
         workerData.compressLevel = typeof params.compressLevel === 'number' ? params.compressLevel : 1;
         this.worker = new worker_threads_1.Worker(path.resolve(__dirname, 'dataset_worker.js'), {
             workerData: workerData
@@ -53,63 +64,46 @@ class Dataset {
         this.worker.dataI = 0;
         this.list = [];
     }
+    async _sendCommand(op, data, transferableObjects) {
+        let commandId = uniqueCommandId++;
+        this.worker.postMessage({ op, id: commandId, data }, transferableObjects);
+        return new Promise((res, rej) => {
+            let onMessage = (message) => {
+                if (message.error) {
+                    rej(message.error);
+                }
+                if (message.id === commandId) {
+                    this.worker.off('message', onMessage);
+                    res(message.data);
+                }
+            };
+            this.worker.on('message', onMessage);
+        });
+    }
     push(objs) {
+        if (!(objs instanceof global[this.type])) {
+            throw new Error(`Input object expected ${this.type} type`);
+        }
         if (objs.length !== this.inputSize) {
             throw new Error(`Input size have ${objs.length}. expected ${this.inputSize}`);
         }
         this.list.push(this.worker.dataI++);
         let clone = objs.slice(0);
-        let commandId = uniqueCommandId++;
-        this.worker.postMessage({ op: 'push', id: commandId, data: clone }, [clone.buffer]);
-        return new Promise((res, rej) => {
-            let onMessage = (message) => {
-                if (message.error) {
-                    rej(message.error);
-                }
-                if (message.id === commandId) {
-                    this.worker.off('message', onMessage);
-                    res(message.data);
-                }
-            };
-            this.worker.on('message', onMessage);
-        });
+        return this._sendCommand('push', clone, [clone.buffer]);
     }
     send(objs) {
+        if (!(objs instanceof global[this.type])) {
+            throw new Error(`Input object expected ${this.type} type`);
+        }
         if (objs.length !== this.inputSize) {
             throw new Error(`Input size have ${objs.length}. expected ${this.inputSize}`);
         }
         this.list.push(this.worker.dataI++);
-        let commandId = uniqueCommandId++;
-        this.worker.postMessage({ op: 'push', id: commandId, data: objs }, [objs.buffer]);
-        return new Promise((res, rej) => {
-            let onMessage = (message) => {
-                if (message.error) {
-                    rej(message.error);
-                }
-                if (message.id === commandId) {
-                    this.worker.off('message', onMessage);
-                    res(message.data);
-                }
-            };
-            this.worker.on('message', onMessage);
-        });
+        return this._sendCommand('push', objs, [objs.buffer]);
     }
     async get(i) {
         let index = this.list[i];
-        let commandId = uniqueCommandId++;
-        this.worker.postMessage({ index, id: commandId, op: 'get' });
-        return await new Promise((res, rej) => {
-            let onMessage = (message) => {
-                if (message.error) {
-                    rej(message.error);
-                }
-                if (message.id === commandId) {
-                    this.worker.off('message', onMessage);
-                    res(message.data);
-                }
-            };
-            this.worker.on('message', onMessage);
-        });
+        return this._sendCommand('get', index);
     }
     async forEachAsync(func) {
         for (let i = 0; i !== this.list.length; i++) {
@@ -136,8 +130,11 @@ class Dataset {
         });
         return result;
     }
-    destroy() {
+    destroy(deleteCacheFile) {
         this.worker.terminate();
+        if (deleteCacheFile) {
+            fs.unlinkSync(this.dataFile);
+        }
     }
 }
 exports.Dataset = Dataset;

@@ -1,6 +1,7 @@
 import * as tfData from '@tensorflow/tfjs-data'
 import * as tfCore from '@tensorflow/tfjs-core'
 import * as path from 'path'
+import * as fs from 'fs'
 import {
     Worker, isMainThread, parentPort, workerData
 } from 'worker_threads'
@@ -8,13 +9,13 @@ import { TypedArray } from '@tensorflow/tfjs-core';
 
 let uniqueId = 0;
 
-const FLOAT32TYPE = 2;
-
-interface WorkerData {
-    name: string,
-    dataFile: string,
-    shape: number[],
-    compressLevel: number,
+export type Dtype = 'Float32Array'|'Uint8Array'|'Buffer'|'Int8Array'|'Uint16Array'|'Int16Array'|'Uint32Array'|'Int32Array'
+export interface WorkerData {
+    name?: string,
+    dataFile?: string,
+    shape?: number[],
+    compressLevel?: number,
+    type?:Dtype
 }
 
 interface Prefetch {
@@ -59,17 +60,32 @@ let uniqueCommandId = 0;
  */
 export class Dataset {
     private name: string
+    dataFile: string
     shape: number[]
     private worker: DatasetWorker
     list: number[]
     inputSize = 1;
+    type:Dtype;
     constructor(params: WorkerData) {
         let workerData: WorkerData = params || {};
         workerData.name = params.name || String(uniqueId++);
         this.name = workerData.name;
-        this.shape = workerData.shape = params.shape;
+        this.dataFile = (this.name) + '.bin'
 
-        this.shape.forEach(size=>this.inputSize*=size)
+        let shape = params.shape;
+        if (!Array.isArray(shape)) {
+            throw new Error(JSON.stringify(shape) + ' shape is not number array');
+        }
+        shape.forEach(dim => {
+            if (typeof dim !== 'number') {
+                throw new Error(JSON.stringify(shape) + ' shape is not number array');
+            }
+            this.inputSize*=dim;
+        })
+
+        this.shape = workerData.shape = shape;
+        this.type = workerData.type = params.type||'Float32Array';
+
 
         workerData.compressLevel = typeof params.compressLevel === 'number' ? params.compressLevel : 1;
 
@@ -79,65 +95,49 @@ export class Dataset {
         this.worker.dataI = 0;
         this.list = [];
     }
+    private async _sendCommand (op:string, data?: any, transferableObjects?: any[]): Promise<any>{
+        let commandId = uniqueCommandId++;
+        this.worker.postMessage({ op, id: commandId, data }, transferableObjects);
+        return new Promise((res, rej) => {
+            let onMessage = (message:any) => {
+                if (message.error) {
+                    rej(message.error);
+                }
+                if (message.id === commandId) {
+                    this.worker.off('message', onMessage);
+                    res(message.data);
+                }
+            };
+            this.worker.on('message', onMessage);
+        });
+    }
     push(objs: TypedArray) {
+        if(!(objs instanceof global[this.type])){
+            throw new Error(`Input object expected ${this.type} type`)
+        }
         if(objs.length!==this.inputSize){
             throw new Error(`Input size have ${objs.length}. expected ${this.inputSize}`)
         }
         this.list.push(this.worker.dataI++);
         let clone = objs.slice(0);
-        let commandId = uniqueCommandId++;
-        this.worker.postMessage({ op: 'push', id: commandId, data: clone }, [clone.buffer]);
-        return new Promise((res, rej) => {
-            let onMessage = (message:any) => {
-                if (message.error) {
-                    rej(message.error);
-                }
-                if (message.id === commandId) {
-                    this.worker.off('message', onMessage);
-                    res(message.data);
-                }
-            };
-            this.worker.on('message', onMessage);
-        });
+        return this._sendCommand('push', clone, [clone.buffer]);
     }
     send(objs: TypedArray) {
+        if(!(objs instanceof global[this.type])){
+            throw new Error(`Input object expected ${this.type} type`)
+        }
         if(objs.length!==this.inputSize){
             throw new Error(`Input size have ${objs.length}. expected ${this.inputSize}`)
         }
         this.list.push(this.worker.dataI++);
-        let commandId = uniqueCommandId++;
-        this.worker.postMessage({ op: 'push', id: commandId, data: objs }, [objs.buffer])
-        return new Promise((res, rej) => {
-            let onMessage = (message:any) => {
-                if (message.error) {
-                    rej(message.error);
-                }
-                if (message.id === commandId) {
-                    this.worker.off('message', onMessage);
-                    res(message.data);
-                }
-            };
-            this.worker.on('message', onMessage);
-        });
+
+        return this._sendCommand('push', objs, [objs.buffer]);
     }
     async get(i: number): Promise<TypedArray> {
 
         let index = this.list[i];
-        let commandId = uniqueCommandId++;
-        this.worker.postMessage({ index, id: commandId, op: 'get' })
-        return await new Promise((res, rej) => {
-            let onMessage = (message: any) => {
-                if (message.error) {
-                    rej(message.error)
-                }
-                if (message.id === commandId) {
-                    this.worker.off('message', onMessage)
-                    res(message.data)
-                }
-            }
-            this.worker.on('message', onMessage)
 
-        })
+        return this._sendCommand('get', index);
     }
     async forEachAsync(func: Function) {
 
@@ -168,8 +168,11 @@ export class Dataset {
         })
         return result;
     }
-    destroy() {
+    destroy(deleteCacheFile:boolean) {
         this.worker.terminate();
+        if(deleteCacheFile){
+            fs.unlinkSync(this.dataFile);
+        }
     }
 }
 

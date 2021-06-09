@@ -15,8 +15,8 @@ Cache large data on disk with compression
 let {Dataset, zip} = require('nodleten')
 
 let inpSize = 28 * 28; 
-const xDataset = new Dataset({shape:[inpSize]})
-const yDataset = new Dataset({shape:[1]})
+const xDataset = new Dataset({shape:[inpSize], type:'Float32Array'})
+const yDataset = new Dataset({shape:[1], type:'Float32Array'})
  
 // generate dataset
 for(let i=0;i!==300;i++){
@@ -51,4 +51,4 @@ yDataset.destroy();
 - [x] Write cache header
 - [ ] Read cache header
 - [ ] Batch, shuffle, repeat, skip, take
-- [ ] Int32, Uint8 types
+- [x] Int32, Uint8 types

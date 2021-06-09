@@ -4,14 +4,30 @@ import * as tfCore from '@tensorflow/tfjs-core'
 import * as lz4 from 'lz4'
 import {parentPort, workerData} from 'worker_threads'
 import { TypedArray } from '@tensorflow/tfjs-core'
+import { WorkerData, Dtype } from './dataset'
 
 let uniqueId = 0;
 
-const FLOAT32TYPE = 2;
 
+const TYPEIDS = {
+    'Float32Array':2,
+    'Uint8Array':8,
+    'Buffer':9,
+    'Int8Array':10,
+    'Uint16Array':11,
+    'Int16Array':12,
+    'Uint32Array':13,
+    'Int32Array':14,
+}
 interface WriteOperation {
     write: Function
     data: Buffer
+}
+
+interface Message {
+    id: Number
+    op:string
+    data?: any
 }
 
 class Dataset {
@@ -26,29 +42,28 @@ class Dataset {
     cache:any
     writeQueue: WriteOperation[]
     writing:boolean
-    buf:Float32Array
+    buf:Buffer
     compressBuf:Buffer
     decompressBuf:Buffer
     inputSize = 1;
-    constructor(params: any = {}) {
-        this.name = params.name || (uniqueId++);
+    type:Dtype
+    constructor(params: WorkerData = {}) {
+        this.name = params.name || String(uniqueId++);
         this.dataFile = (this.name) + '.bin'
-        this.shape = params.shape;
+        this.type = params.type||'Float32Array';
 
+        let mainType = global[this.type];
         this.compressLevel = typeof params.compressLevel === 'number' ? params.compressLevel : 1;
 
         this.f;// file with dataset
 
         this._p = 0;//file position
-        if (!Array.isArray(this.shape)) {
+
+        let shape = params.shape;
+        if (!Array.isArray(shape)) {
             throw new Error('Shape field not array');
         }
 
-
-        let shape = this.shape
-        if (!Array.isArray(shape)) {
-            throw new Error(JSON.stringify(shape) + ' shape is not number array');
-        }
         shape.forEach(dim => {
             if (typeof dim !== 'number') {
                 throw new Error(JSON.stringify(shape) + ' shape is not number array');
@@ -56,9 +71,11 @@ class Dataset {
             this.inputSize*=dim;
         })
         
-        this.buf = new Float32Array(this.inputSize);
+        this.shape = shape;
+
+        this.buf = Buffer.alloc(this.inputSize*mainType.BYTES_PER_ELEMENT);
         
-        this.compressBuf = Buffer.alloc(lz4.encodeBound(this.inputSize * 4 * 1.5));//Buffer.alloc(lz4.encodeBound(len*4));
+        this.compressBuf = Buffer.alloc(lz4.encodeBound(this.inputSize * mainType.BYTES_PER_ELEMENT * 1.5));
         this.decompressBuf = Buffer.alloc(this.compressBuf.length);
 
         this.fileOpen = fsPromises.open(this.dataFile, 'a+').then((f) => {
@@ -128,7 +145,7 @@ class Dataset {
         let p = this._p;
         this._p += length;
 
-        let dataInfo = new BigUint64Array([BigInt(p), BigInt(length), BigInt(FLOAT32TYPE), 0n]);
+        let dataInfo = new BigUint64Array([BigInt(p), BigInt(length), BigInt(TYPEIDS[this.type]), 0n]);
 
         this.list.push(dataInfo);
 
@@ -200,7 +217,7 @@ class Dataset {
 
         let p = Number(dataInfo[0]);
         let len = Number(dataInfo[1]);
-        let out = Buffer.from(this.buf.buffer, this.buf.byteOffset, this.buf.byteLength);
+        let out = this.buf;
         let uncompressedSize = 0;
         if (this.cache[p]) {
             let writeData = this.cache[p].writeData;
@@ -216,7 +233,8 @@ class Dataset {
             throw new Error(`uncompressedSize (${uncompressedSize}) !== this.buf.byteLength (${this.buf.byteLength})`)
         }
 
-        return this.buf
+        let mainType = global[this.type];
+        return new mainType(this.buf.buffer, this.buf.byteOffset, this.buf.byteLength/mainType.BYTES_PER_ELEMENT )
     }
     async forEachAsync(func: Function) {
         await this.fileOpen;
@@ -242,42 +260,42 @@ let dataset = new Dataset(workerData);
 if(!parentPort){
     throw new Error('parentPort not found')
 }
-parentPort.on('message', async (message) => {
+parentPort.on('message', async ({id, op, data}: Message) => {
     if(!parentPort){
         throw new Error('parentPort not found')
     }
     try {
-        switch (message.op) {
+        switch (op) {
             case ('get'): {
-                let dataInfo = dataset.list[message.index];
+                let dataInfo = dataset.list[data];
                 if (!dataInfo) {
                     console.log('ddddd', dataset.list.length);
-                    throw new Error(`data in ${message.index} index not found`)
+                    throw new Error(`data in ${data} index not found`)
                 }
 
-                let data = await dataset.get(dataInfo)
+                let result = await dataset.get(dataInfo)
 
-                parentPort.postMessage({ id: message.id, data });
+                parentPort.postMessage({ id, data: result });
 
                 break;
             }
             case ('push'): {// push
-                dataset.push(message.data);
-                parentPort.postMessage({ id: message.id });
+                dataset.push(data);
+                parentPort.postMessage({ id });
                 break;
             }
             case ('writeHeaderFile'): {
                 await dataset.sync();
                 await dataset.writeHeaderFile();
-                parentPort.postMessage({ id: message.id });
+                parentPort.postMessage({ id });
                 break;
             }
             default: {
-                throw new Error('unknown command: ' + message.op);
+                throw new Error('unknown command: ' + op);
             }
         }
     } catch (error) {
-        parentPort.postMessage({ id: message.id, error });
+        parentPort.postMessage({ id, error });
     }
 });
 
