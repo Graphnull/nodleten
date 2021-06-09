@@ -6,7 +6,8 @@
   "scripts": {
     "build": "tsc",
     "docs": "typedoc --out docs src/index.ts",
-    "test": "npm run build && cd tests && node write-read && node perfomance"
+    "test": "npm run build && cd tests && node write-read && node perfomance",
+    "testDiode": "npm run build && cd tests && node diode"
   },
   "repository": {
     "type": "git",

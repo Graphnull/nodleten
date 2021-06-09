@@ -17,7 +17,7 @@ interface WriteOperation {
 class Dataset {
     name:string
     dataFile:string
-    shape:string
+    shape:number[]
     compressLevel:number
     f?: fs.promises.FileHandle
     _p: number
@@ -29,6 +29,7 @@ class Dataset {
     buf:Float32Array
     compressBuf:Buffer
     decompressBuf:Buffer
+    inputSize = 1;
     constructor(params: any = {}) {
         this.name = params.name || (uniqueId++);
         this.dataFile = (this.name) + '.bin'
@@ -43,7 +44,6 @@ class Dataset {
             throw new Error('Shape field not array');
         }
 
-        let len = 0;
 
         let shape = this.shape
         if (!Array.isArray(shape)) {
@@ -53,11 +53,12 @@ class Dataset {
             if (typeof dim !== 'number') {
                 throw new Error(JSON.stringify(shape) + ' shape is not number array');
             }
-            len += dim | 0
+            this.inputSize*=dim;
         })
         
-        this.buf = new Float32Array(len);
-        this.compressBuf = Buffer.alloc(lz4.encodeBound(len * 4 * 1.5));//Buffer.alloc(lz4.encodeBound(len*4));
+        this.buf = new Float32Array(this.inputSize);
+        
+        this.compressBuf = Buffer.alloc(lz4.encodeBound(this.inputSize * 4 * 1.5));//Buffer.alloc(lz4.encodeBound(len*4));
         this.decompressBuf = Buffer.alloc(this.compressBuf.length);
 
         this.fileOpen = fsPromises.open(this.dataFile, 'a+').then((f) => {
@@ -109,7 +110,9 @@ class Dataset {
         if (!objs) {
             throw new Error('Data not found')
         }
-
+        if(objs.length!==this.inputSize){
+            throw new Error(`Input size have ${objs.length}. expected ${this.inputSize}`)
+        }
         let data = objs;
 
         let length = lz4.encodeBlock(Buffer.from(data.buffer, data.byteOffset, data.byteLength), this.compressBuf)
@@ -134,10 +137,15 @@ class Dataset {
         this.cache[p] = { writeData }
         this.writeQueue.push({
             data: writeData, write: async () => {
+                try{
                 this.writing = true;
                 await (this.f as fsPromises.FileHandle).write(writeData, 0, length, p);
                 delete this.cache[p];
                 this.writing = false;
+                }catch(err){
+                    console.log('unhandled error');
+                    process.exit(1);
+                }
 
             }
         })

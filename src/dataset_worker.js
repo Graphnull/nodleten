@@ -28,6 +28,7 @@ let uniqueId = 0;
 const FLOAT32TYPE = 2;
 class Dataset {
     constructor(params = {}) {
+        this.inputSize = 1;
         this.name = params.name || (uniqueId++);
         this.dataFile = (this.name) + '.bin';
         this.shape = params.shape;
@@ -37,7 +38,6 @@ class Dataset {
         if (!Array.isArray(this.shape)) {
             throw new Error('Shape field not array');
         }
-        let len = 0;
         let shape = this.shape;
         if (!Array.isArray(shape)) {
             throw new Error(JSON.stringify(shape) + ' shape is not number array');
@@ -46,10 +46,10 @@ class Dataset {
             if (typeof dim !== 'number') {
                 throw new Error(JSON.stringify(shape) + ' shape is not number array');
             }
-            len += dim | 0;
+            this.inputSize *= dim;
         });
-        this.buf = new Float32Array(len);
-        this.compressBuf = Buffer.alloc(lz4.encodeBound(len * 4 * 1.5)); //Buffer.alloc(lz4.encodeBound(len*4));
+        this.buf = new Float32Array(this.inputSize);
+        this.compressBuf = Buffer.alloc(lz4.encodeBound(this.inputSize * 4 * 1.5)); //Buffer.alloc(lz4.encodeBound(len*4));
         this.decompressBuf = Buffer.alloc(this.compressBuf.length);
         this.fileOpen = fs_1.promises.open(this.dataFile, 'a+').then((f) => {
             this.f = f;
@@ -89,11 +89,17 @@ class Dataset {
     take() { throw new Error('not implemented'); }
     toArray() { throw new Error('not implemented'); }
     async push(objs) {
+        console.log('push');
         if (!objs) {
             throw new Error('Data not found');
         }
+        if (objs.length !== this.inputSize) {
+            throw new Error(`Input size have ${objs.length}. expected ${this.inputSize}`);
+        }
         let data = objs;
+        console.log(1, Buffer.from(data.buffer, data.byteOffset, data.byteLength).length, this.compressBuf.length);
         let length = lz4.encodeBlock(Buffer.from(data.buffer, data.byteOffset, data.byteLength), this.compressBuf);
+        console.log('length: ', length);
         if (length > this.compressBuf.length) {
             throw new Error(`compressBuf.length (${this.compressBuf.length})<compressedSize (${length})`);
         }
@@ -108,10 +114,16 @@ class Dataset {
         this.writeQueue.push({
             data: writeData,
             write: async () => {
-                this.writing = true;
-                await this.f.write(writeData, 0, length, p);
-                delete this.cache[p];
-                this.writing = false;
+                try {
+                    this.writing = true;
+                    console.log('wri111', this.dataFile, writeData, length, p);
+                    await this.f.write(writeData, 0, length, p);
+                    delete this.cache[p];
+                    this.writing = false;
+                }
+                catch (err) {
+                    console.log('unhandled error');
+                }
             }
         });
         await this.fileOpen;
@@ -222,6 +234,7 @@ worker_threads_1.parentPort.on('message', async (message) => {
         }
     }
     catch (error) {
+        console.log('ee', error);
         worker_threads_1.parentPort.postMessage({ id: message.id, error });
     }
 });
