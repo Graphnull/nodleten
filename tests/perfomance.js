@@ -83,6 +83,9 @@ async function trainModel() {
       callbacks: {onEpochEnd: (epoch, logs) => {console.log( 'onEnd',epoch, logs.loss)}}
   });
   console.log('time', new Date()-time);
+  
+  xDataset.destroy();
+  yDataset.destroy();
 
 }
  // setInterval(()=>{},1000)

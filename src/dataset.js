@@ -45,8 +45,11 @@ class Dataset extends tfData.Dataset {
         let index = this.list[i];
         let commandId = uniqueCommandId++;
         this.worker.postMessage({index,id:commandId,op:'get'})
-        let result = await new Promise((res)=>{
+        let result = await new Promise((res, rej)=>{
             let onMessage = (message)=>{
+                if(message.error){
+                    rej(message.error)
+                }
                 if(message.id === commandId){
                     this.worker.off('message', onMessage)
                     res(message.data)
@@ -73,8 +76,11 @@ class Dataset extends tfData.Dataset {
     async writeHeaderFile(){
         let commandId = uniqueCommandId++;
         this.worker.postMessage({id:commandId,op:'writeHeaderFile'})
-        let result = await new Promise((res)=>{
+        let result = await new Promise((res, rej)=>{
             let onMessage = (message)=>{
+                if(message.error){
+                    rej(message.error)
+                }
                 if(message.id === commandId){
                     this.worker.off('message', onMessage)
                     res(message.data)
@@ -116,7 +122,6 @@ class Zip {
     take (){throw new Error('not implemented')}
     toArray (){throw new Error('not implemented')}
     async forEachAsync(func){
-
         let list = this.firstDataset.list;
         for(let i=0;i!== list.length;i++){
             let out = {}
@@ -134,8 +139,6 @@ class Zip {
                 func(out);
             })
         }
-        
-
     }
     async iterator(){
         let i=0;
@@ -284,9 +287,10 @@ class Dataset {
 
         this.list = [];
         
-        this.queue={};
+        this.cache={};
        
         this.writeQueue=[];
+        this.writing = false;
     }
     async writeHeaderFile (){
 
@@ -348,8 +352,6 @@ class Dataset {
             throw new Error('Data not found')
         }
 
- 
-        let offset = 0;
         let data = objs;
 
         let  length = lz4.encodeBlock(Buffer.from(data.buffer,data.byteOffset, data.byteLength), this.compressBuf)
@@ -358,7 +360,7 @@ class Dataset {
             throw new Error(`compressBuf.length (${this.compressBuf.length})<compressedSize (${length})`)
         }
 
-        let cloned = Uint8Array.prototype.slice.call(this.compressBuf, 0, length)
+        let writeData = Uint8Array.prototype.slice.call(this.compressBuf, 0, length)
 
         let p = this._p;
         this._p+=length;
@@ -367,21 +369,28 @@ class Dataset {
         
         this.list.push(dataInfo);
 
-        let writeData = Buffer.from(cloned.buffer, cloned.byteOffset, length);
-        this.queue[p]={writeData}
 
 
-        let writeQueueLength = 0;
-        this.writeQueue.forEach((data)=>{
-            writeQueueLength+=data.length;
-        })
+        this.cache[p]={writeData}
+        this.writeQueue.push({data:writeData, write:async()=>{
+            this.writing = true;
+            await this.f.write(writeData, 0, length, p);
+            delete this.cache[p];
+            this.writing = false;
 
+        }})
+
+
+        await this.fileOpen;
         //TODO batch write
         if(true){
-            await this.fileOpen;
-            let writing = this.f.write(writeData, 0, length, p);
-            await writing;
-            delete this.queue[p];
+            if(!this.writing){
+                while(this.writeQueue.length){
+                    await this.writeQueue[0].write();
+                    this.writeQueue.shift();
+                }
+
+            }
         }else{
             let writeQueueLength = 0;
             
@@ -393,10 +402,10 @@ class Dataset {
                 await this.fileOpen;
                 let writing = this.f.write(Buffer.concat(this.writeQueue.concat([writeData])), 0, writeQueueLength+writeData.length, p)//TODO, //TODO);
                 await writing;
-                Object.keys(this.queue).forEach((key)=>{
-                    delete this.queue[key];
+                Object.keys(this.cache).forEach((key)=>{
+                    delete this.cache[key];
                 })
-                this.queue={};
+                this.cache={};
                 this.writeQueue=[];
             }else{
                 this.writeQueue.push(writeData)
@@ -409,31 +418,31 @@ class Dataset {
     async sync(){
 
         await this.fileOpen;
-        let promises = Object.keys(this.queue).map(_p=>{
+        let promises = Object.keys(this.cache).map(_p=>{
             let p = Number(_p);
-            let data = this.queue[_p].writeData
+            let data = this.cache[_p].writeData
             return this.f.write(data, 0, data.length, p);
         })
         await Promise.all(promises)
-        this.queue=[];
+        this.cache={};
     }
     async get(dataInfo){
         
-
         let p = Number(dataInfo[0]);
         let len = Number(dataInfo[1]);
         let out = Buffer.from(this.buf.buffer, this.buf.byteOffset, this.buf.byteLength);
         let uncompressedSize = 0;
-        if(this.queue[p]){
-            let writeData = this.queue[p].writeData;
+        if(this.cache[p]){
+            let writeData = this.cache[p].writeData;
             uncompressedSize = lz4.decodeBlock(writeData, out)
         }else{
-            await this.f.read(this.decompressBuf, 0, len, p);
-            uncompressedSize = lz4.decodeBlock(this.decompressBuf.subarray(0,len), out)
+            let temp = Buffer.allocUnsafe(len);
+            await this.f.read(temp, 0, len, p);
+            uncompressedSize = lz4.decodeBlock(temp, out)
         }
 
-        if(uncompressedSize !== this.buf.byteLength){
-            console.log(p, len,this.decompressBuf.length, this.queue[p]);
+        if(uncompressedSize !== out.length){
+            console.log(p, len, out.length, this.cache[p]);
             throw new Error(`uncompressedSize (${uncompressedSize}) !== this.buf.byteLength (${this.buf.byteLength})`)
         }
 
@@ -464,52 +473,38 @@ class Dataset {
 let dataset = new Dataset(workerData);
 
 
-// setInterval(()=>{
-//     let lenght = 0;
-//     Object.values(dataset.queue).forEach(q=>{
-//         lenght+=q.writeData.length
-//     })
-//     console.log('stats', (lenght/1024/1024).toFixed(2));
-// },100)
-let time = null;
-let startMark = null;
-let endMark = null;
 parentPort.on('message', async (message) => {
-    switch(message.op){
-        case('get'):{
-            if(time){
-            
-                console.log('first', new Date()-time);
-                time = null;
-            }
-            let dataInfo = dataset.list[message.index];
-            if(!dataInfo){
-                console.log('ddddd',dataset.list.length);
-                throw new Error(`data in ${message.index} index not found`)
-            }
-            
-            let data = await dataset.get(dataInfo)
+    try{
+        switch(message.op){
+            case('get'):{
+                let dataInfo = dataset.list[message.index];
+                if(!dataInfo){
+                    console.log('ddddd',dataset.list.length);
+                    throw new Error(`data in ${message.index} index not found`)
+                }
+                
+                let data = await dataset.get(dataInfo)
 
-            parentPort.postMessage({id:message.id,data});
-            
-        break;
-        }
-        case('push'):{// push
-            dataset.push(message.data);
-            time = new Date();
-            //startMark = performance.mark('end1')
-            //parentPort.postMessage(message);
+                parentPort.postMessage({id:message.id,data});
+                
             break;
+            }
+            case('push'):{// push
+                dataset.push(message.data);
+                break;
+            }
+            case('writeHeaderFile'):{
+                await dataset.sync();
+                await dataset.writeHeaderFile();
+                parentPort.postMessage({id:message.id});
+                break;
+            }
+            default:{
+                throw new Error('unknown command: '+message.op);
+            }
         }
-        case('writeHeaderFile'):{
-            await dataset.sync();
-            await dataset.writeHeaderFile();
-            parentPort.postMessage({id:message.id});
-            break;
-        }
-        default:{
-            throw new Error('unknown command: '+message.op);
-        }
+    }catch(error){
+        parentPort.postMessage({id:message.id, error});
     }
   });
 }

@@ -33,10 +33,10 @@ async function test() {
     }
 
     let i=0;
-    await dataset.forEachAsync(async(tensor)=>{
+    await dataset.forEachAsync((tensor)=>{
         let j = i++;
         let data = tensor.dataSync();
-        if(data[0]!=j || data[1]!=0 || data[2]!=1 || data[3]!=2 || data[4]!=3 || data[5]!=j){
+        if((data[0]|0)!=(j|0) || (data[1]|0)!=0 || (data[2]|0)!=1 || (data[3]|0)!=2 || (data[4]|0)!=3 || (data[5]|0)!=(j|0)){
             throw new Error(''+j+' not equal'+data.slice(0,6))
 
         }
