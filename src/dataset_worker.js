@@ -207,6 +207,7 @@ worker_threads_1.parentPort.on('message', async (message) => {
             }
             case ('push'): { // push
                 dataset.push(message.data);
+                worker_threads_1.parentPort.postMessage({ id: message.id });
                 break;
             }
             case ('writeHeaderFile'): {

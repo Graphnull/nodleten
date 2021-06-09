@@ -30,19 +30,22 @@ let uniqueCommandId = 0;
  * Create a Dataset with disk cache
  *
  * Example:
+ * ```
  * const rgbDataset = new Dataset({shape:[2, 2, 3]})
  *
  * let image = new Float32Array([0,1,2,3,4,5,1,2,3,4,5,6])
  * rgbDataset.push(image)
- *
+ * ```
  * @param WorkerData
  */
 class Dataset {
     constructor(params) {
+        this.inputSize = 0;
         let workerData = params || {};
         workerData.name = params.name || String(uniqueId++);
         this.name = workerData.name;
         this.shape = workerData.shape = params.shape;
+        this.shape.forEach(size => this.inputSize += size);
         workerData.compressLevel = typeof params.compressLevel === 'number' ? params.compressLevel : 1;
         this.worker = new worker_threads_1.Worker(path.resolve(__dirname, 'dataset_worker.js'), {
             workerData: workerData
@@ -51,13 +54,45 @@ class Dataset {
         this.list = [];
     }
     push(objs) {
+        if (objs.length !== this.inputSize) {
+            throw new Error(`Input size have ${objs.length}. expected ${this.inputSize}`);
+        }
         this.list.push(this.worker.dataI++);
         let clone = objs.slice(0);
-        this.worker.postMessage({ op: 'push', data: clone }, [clone.buffer]);
+        let commandId = uniqueCommandId++;
+        this.worker.postMessage({ op: 'push', id: commandId, data: clone }, [clone.buffer]);
+        return new Promise((res, rej) => {
+            let onMessage = (message) => {
+                if (message.error) {
+                    rej(message.error);
+                }
+                if (message.id === commandId) {
+                    this.worker.off('message', onMessage);
+                    res(message.data);
+                }
+            };
+            this.worker.on('message', onMessage);
+        });
     }
     send(objs) {
+        if (objs.length !== this.inputSize) {
+            throw new Error(`Input size have ${objs.length}. expected ${this.inputSize}`);
+        }
         this.list.push(this.worker.dataI++);
-        this.worker.postMessage({ op: 'push', data: objs }, [objs.buffer]);
+        let commandId = uniqueCommandId++;
+        this.worker.postMessage({ op: 'push', id: commandId, data: objs }, [objs.buffer]);
+        return new Promise((res, rej) => {
+            let onMessage = (message) => {
+                if (message.error) {
+                    rej(message.error);
+                }
+                if (message.id === commandId) {
+                    this.worker.off('message', onMessage);
+                    res(message.data);
+                }
+            };
+            this.worker.on('message', onMessage);
+        });
     }
     async get(i) {
         let index = this.list[i];
@@ -221,13 +256,14 @@ class Zip {
  * Create a Dataset by zipping dict
  *
  * Example:
+ * ```
  * const xDataset = new Dataset({shape:[100, 100]})
  * const yDataset = new Dataset({shape:[1]})
  *
  * const xyDataset = zip({xs: xDataset, ys: yDataset})
  *
  * model.fitDataset(xyDataset, {});
- *
+ * ```
  * @param {[key]:Dataset}
  * @returns Zip
  */

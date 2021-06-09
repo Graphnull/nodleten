@@ -61,6 +61,17 @@ async function test() {
     console.log('success')
     dataset.destroy();
 
+    var normalDataset;
+    try{
+        normalDataset = new Dataset({name:'normal', shape:[768, 1024,3]});
+        await normalDataset.push(new Float32Array(10))
+        throw new Error('not')
+    }catch(err){
+        if(err.message==='not'){
+            throw new Error('Not acceptable lenght')
+        }
+    }
+    normalDataset.destroy()
 }
 test().catch(err => {
     console.error(err);

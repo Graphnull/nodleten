@@ -255,6 +255,7 @@ parentPort.on('message', async (message) => {
             }
             case ('push'): {// push
                 dataset.push(message.data);
+                parentPort.postMessage({ id: message.id });
                 break;
             }
             case ('writeHeaderFile'): {

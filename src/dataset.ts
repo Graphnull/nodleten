@@ -62,11 +62,14 @@ export class Dataset {
     shape: number[]
     private worker: DatasetWorker
     list: number[]
+    inputSize = 0;
     constructor(params: WorkerData) {
         let workerData: WorkerData = params || {};
         workerData.name = params.name || String(uniqueId++);
         this.name = workerData.name;
         this.shape = workerData.shape = params.shape;
+
+        this.shape.forEach(size=>this.inputSize+=size)
 
         workerData.compressLevel = typeof params.compressLevel === 'number' ? params.compressLevel : 1;
 
@@ -77,13 +80,45 @@ export class Dataset {
         this.list = [];
     }
     push(objs: TypedArray) {
+        if(objs.length!==this.inputSize){
+            throw new Error(`Input size have ${objs.length}. expected ${this.inputSize}`)
+        }
         this.list.push(this.worker.dataI++);
         let clone = objs.slice(0);
-        this.worker.postMessage({ op: 'push', data: clone }, [clone.buffer])
+        let commandId = uniqueCommandId++;
+        this.worker.postMessage({ op: 'push', id: commandId, data: clone }, [clone.buffer]);
+        return new Promise((res, rej) => {
+            let onMessage = (message:any) => {
+                if (message.error) {
+                    rej(message.error);
+                }
+                if (message.id === commandId) {
+                    this.worker.off('message', onMessage);
+                    res(message.data);
+                }
+            };
+            this.worker.on('message', onMessage);
+        });
     }
     send(objs: TypedArray) {
+        if(objs.length!==this.inputSize){
+            throw new Error(`Input size have ${objs.length}. expected ${this.inputSize}`)
+        }
         this.list.push(this.worker.dataI++);
-        this.worker.postMessage({ op: 'push', data: objs }, [objs.buffer])
+        let commandId = uniqueCommandId++;
+        this.worker.postMessage({ op: 'push', id: commandId, data: objs }, [objs.buffer])
+        return new Promise((res, rej) => {
+            let onMessage = (message:any) => {
+                if (message.error) {
+                    rej(message.error);
+                }
+                if (message.id === commandId) {
+                    this.worker.off('message', onMessage);
+                    res(message.data);
+                }
+            };
+            this.worker.on('message', onMessage);
+        });
     }
     async get(i: number): Promise<TypedArray> {
 
