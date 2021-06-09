@@ -89,7 +89,6 @@ class Dataset {
     take() { throw new Error('not implemented'); }
     toArray() { throw new Error('not implemented'); }
     async push(objs) {
-        console.log('push');
         if (!objs) {
             throw new Error('Data not found');
         }
@@ -97,9 +96,7 @@ class Dataset {
             throw new Error(`Input size have ${objs.length}. expected ${this.inputSize}`);
         }
         let data = objs;
-        console.log(1, Buffer.from(data.buffer, data.byteOffset, data.byteLength).length, this.compressBuf.length);
         let length = lz4.encodeBlock(Buffer.from(data.buffer, data.byteOffset, data.byteLength), this.compressBuf);
-        console.log('length: ', length);
         if (length > this.compressBuf.length) {
             throw new Error(`compressBuf.length (${this.compressBuf.length})<compressedSize (${length})`);
         }
@@ -116,13 +113,13 @@ class Dataset {
             write: async () => {
                 try {
                     this.writing = true;
-                    console.log('wri111', this.dataFile, writeData, length, p);
                     await this.f.write(writeData, 0, length, p);
                     delete this.cache[p];
                     this.writing = false;
                 }
                 catch (err) {
                     console.log('unhandled error');
+                    process.exit(1);
                 }
             }
         });
@@ -234,7 +231,6 @@ worker_threads_1.parentPort.on('message', async (message) => {
         }
     }
     catch (error) {
-        console.log('ee', error);
         worker_threads_1.parentPort.postMessage({ id: message.id, error });
     }
 });
