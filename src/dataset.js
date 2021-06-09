@@ -66,13 +66,11 @@ class Dataset {
         });
     }
     async forEachAsync(func) {
-        //TODO
         for (let i = 0; i !== this.list.length; i++) {
             let out = await this.get(this.list[i]);
-            throw new Error('not implemented');
-            // tfCore.tidy(() => {
-            //     func(tfCore.tensor(out));
-            // })
+            tfCore.tidy(() => {
+                func(tfCore.tensor(out));
+            });
         }
     }
     async writeHeaderFile() {

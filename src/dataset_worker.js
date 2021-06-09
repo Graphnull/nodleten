@@ -98,6 +98,7 @@ class Dataset {
             throw new Error(`compressBuf.length (${this.compressBuf.length})<compressedSize (${length})`);
         }
         let writeData = Buffer.allocUnsafe(length);
+        this.compressBuf.copy(writeData, 0, 0, length);
         writeData.copy(this.compressBuf, 0, 0, length);
         let p = this._p;
         this._p += length;
@@ -105,8 +106,7 @@ class Dataset {
         this.list.push(dataInfo);
         this.cache[p] = { writeData };
         this.writeQueue.push({
-            data: writeData,
-            write: async () => {
+            data: writeData, write: async () => {
                 this.writing = true;
                 await this.f.write(writeData, 0, length, p);
                 delete this.cache[p];

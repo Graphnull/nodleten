@@ -119,6 +119,7 @@ class Dataset {
         }
 
         let writeData = Buffer.allocUnsafe(length)
+        this.compressBuf.copy(writeData, 0, 0, length);
         writeData.copy(this.compressBuf, 0,0,length)
 
         let p = this._p;

@@ -91,17 +91,14 @@ export class Dataset {
 
         })
     }
-    async forEachAsync(func: any) {
-        //TODO
+    async forEachAsync(func: Function) {
 
         for (let i = 0; i !== this.list.length; i++) {
 
             let out = await this.get(this.list[i]);
-
-            throw new Error('not implemented')
-            // tfCore.tidy(() => {
-            //     func(tfCore.tensor(out));
-            // })
+            tfCore.tidy(() => {
+                func(tfCore.tensor(out));
+            })
         }
 
     }
