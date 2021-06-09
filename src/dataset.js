@@ -40,12 +40,12 @@ let uniqueCommandId = 0;
  */
 class Dataset {
     constructor(params) {
-        this.inputSize = 0;
+        this.inputSize = 1;
         let workerData = params || {};
         workerData.name = params.name || String(uniqueId++);
         this.name = workerData.name;
         this.shape = workerData.shape = params.shape;
-        this.shape.forEach(size => this.inputSize += size);
+        this.shape.forEach(size => this.inputSize *= size);
         workerData.compressLevel = typeof params.compressLevel === 'number' ? params.compressLevel : 1;
         this.worker = new worker_threads_1.Worker(path.resolve(__dirname, 'dataset_worker.js'), {
             workerData: workerData

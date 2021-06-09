@@ -62,14 +62,14 @@ export class Dataset {
     shape: number[]
     private worker: DatasetWorker
     list: number[]
-    inputSize = 0;
+    inputSize = 1;
     constructor(params: WorkerData) {
         let workerData: WorkerData = params || {};
         workerData.name = params.name || String(uniqueId++);
         this.name = workerData.name;
         this.shape = workerData.shape = params.shape;
 
-        this.shape.forEach(size=>this.inputSize+=size)
+        this.shape.forEach(size=>this.inputSize*=size)
 
         workerData.compressLevel = typeof params.compressLevel === 'number' ? params.compressLevel : 1;
 
