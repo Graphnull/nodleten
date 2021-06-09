@@ -106,7 +106,8 @@ class Dataset {
         this.list.push(dataInfo);
         this.cache[p] = { writeData };
         this.writeQueue.push({
-            data: writeData, write: async () => {
+            data: writeData,
+            write: async () => {
                 this.writing = true;
                 await this.f.write(writeData, 0, length, p);
                 delete this.cache[p];

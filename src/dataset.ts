@@ -11,53 +11,66 @@ let uniqueId = 0;
 const FLOAT32TYPE = 2;
 
 interface WorkerData {
-    name:string,
-    dataFile:string,
-    shape:string,
-    compressLevel:number,
+    name: string,
+    dataFile: string,
+    shape: number[],
+    compressLevel: number,
 }
 
 interface Prefetch {
-    i:number
-    promise:Promise<TypedArray>
-    data?:TypedArray
+    i: number
+    promise: Promise<TypedArray>
+    data?: TypedArray
 }
 interface Prefetches {
     [thingName: string]: Prefetch[]
-  }
+}
 
 interface ZipResult {
     [thingName: string]: tfCore.Tensor
-  }
+}
 
 interface TensorBuffers {
     [thingName: string]: tfCore.TensorBuffer<any, any>
-  }
+}
 
-  interface Datasets {
+interface Datasets {
     [thingName: string]: Dataset
-  }
-type DatasetWorker = Worker & {dataI: number}
+}
+type DatasetWorker = Worker & { dataI: number }
 
 interface ZipTypedArrays {
     [thingName: string]: TypedArray
 }
 
 let uniqueCommandId = 0;
+
+/**
+ * Create a Dataset with disk cache
+ * 
+ * Example:
+ * ```
+ * const rgbDataset = new Dataset({shape:[2, 2, 3]})
+ * 
+ * let image = new Float32Array([0,1,2,3,4,5,1,2,3,4,5,6])
+ * rgbDataset.push(image)
+ * ```
+ * @param WorkerData 
+ */
 export class Dataset {
-    name:string
-    shape:number[]
-    worker: DatasetWorker
+    private name: string
+    shape: number[]
+    private worker: DatasetWorker
     list: number[]
-    constructor(params:any = {}) {
-        let workerData: WorkerData = params;
-        workerData.name = params.name || (uniqueId++);
+    constructor(params: WorkerData) {
+        let workerData: WorkerData = params || {};
+        workerData.name = params.name || String(uniqueId++);
         this.name = workerData.name;
         this.shape = workerData.shape = params.shape;
 
         workerData.compressLevel = typeof params.compressLevel === 'number' ? params.compressLevel : 1;
 
-        this.worker = new Worker(path.resolve(__dirname,'dataset_worker.js'), {
+        this.worker = new Worker(path.resolve(__dirname, 'dataset_worker.js'), {
             workerData: workerData
         }) as DatasetWorker;
         this.worker.dataI = 0;
@@ -127,16 +140,16 @@ export class Dataset {
 
 
 class Zip {
-    datasets:Datasets
-    firstDataset: Dataset
-    keys: string[]
-    tensorBuffers: TensorBuffers
-    prefetches:Prefetches
+    private datasets: Datasets
+    private firstDataset: Dataset
+    private keys: string[]
+    private tensorBuffers: TensorBuffers
+    private prefetches: Prefetches
     constructor(datasets: Datasets) {
 
         this.datasets = datasets;
         this.firstDataset = Object.values(datasets)[0];
-        if(!this.firstDataset){
+        if (!this.firstDataset) {
             throw new Error('dataset not found')
         }
         this.keys = Object.keys(datasets);
@@ -146,7 +159,7 @@ class Zip {
         this.keys.forEach(key => {
             this.prefetches[key] = [];
             let dataset = this.datasets[key]
-            this.tensorBuffers[key] = tfCore.buffer([1].concat( dataset.shape ));
+            this.tensorBuffers[key] = tfCore.buffer([1].concat(dataset.shape));
         })
     }
     batch() { throw new Error('not implemented') }
@@ -169,7 +182,7 @@ class Zip {
                 let key = this.keys[k];
                 typedArrays[key] = await this.datasets[key].get(this.datasets[key].list[i]);
             }
-            let out:ZipResult = {}
+            let out: ZipResult = {}
 
             tfCore.tidy(() => {
                 for (let k = 0; k !== this.keys.length; k++) {
@@ -193,7 +206,7 @@ class Zip {
                     return { value: null, done: true };
                 }
                 i++;
-                let results:ZipTypedArrays = {}
+                let results: ZipTypedArrays = {}
                 let getingDatas = this.keys.map(async key => {
 
                     //check prefetch data
@@ -230,19 +243,19 @@ class Zip {
 
                     for (let ni = 0; ni !== ids.length; ni++) {
                         let i = ids[ni];
-                        let prefetch:Prefetch = {
+                        let prefetch: Prefetch = {
                             i,
-                            promise:this.datasets[key].get(i)
-                            .then(data => {
-                                return prefetch.data = data;
-                            })
+                            promise: this.datasets[key].get(i)
+                                .then(data => {
+                                    return prefetch.data = data;
+                                })
                         }
                         this.prefetches[key].push(prefetch)
                     }
 
                 }
 
-                let out:ZipResult = {}
+                let out: ZipResult = {}
                 for (let k = 0; k !== this.keys.length; k++) {
                     let key = this.keys[k];
                     this.tensorBuffers[key].values = results[key]
@@ -257,7 +270,22 @@ class Zip {
         }
     }
 }
-export function zip(objects: any) {
+/**
+ * Create a Dataset by zipping dict
+ * 
+ * Example:
+ * ```
+ * const xDataset = new Dataset({shape:[100, 100]})
+ * const yDataset = new Dataset({shape:[1]})
+ * 
+ * const xyDataset = zip({xs: xDataset, ys: yDataset})
+ * 
+ * model.fitDataset(xyDataset, {});
+ * ```
+ * @param {[key]:Dataset}
+ * @returns Zip
+ */
+export function zip(objects: Datasets) {
 
     return new Zip(objects);
 }

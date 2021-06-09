@@ -26,10 +26,21 @@ const worker_threads_1 = require("worker_threads");
 let uniqueId = 0;
 const FLOAT32TYPE = 2;
 let uniqueCommandId = 0;
+/**
+ * Create a Dataset with disk cache
+ *
+ * Example:
+ * const rgbDataset = new Dataset({shape:[2, 2, 3]})
+ *
+ * let image = new Float32Array([0,1,2,3,4,5,1,2,3,4,5,6])
+ * rgbDataset.push(image)
+ *
+ * @param WorkerData
+ */
 class Dataset {
-    constructor(params = {}) {
-        let workerData = params;
-        workerData.name = params.name || (uniqueId++);
+    constructor(params) {
+        let workerData = params || {};
+        workerData.name = params.name || String(uniqueId++);
         this.name = workerData.name;
         this.shape = workerData.shape = params.shape;
         workerData.compressLevel = typeof params.compressLevel === 'number' ? params.compressLevel : 1;
@@ -206,6 +217,20 @@ class Zip {
         };
     }
 }
+/**
+ * Create a Dataset by zipping dict
+ *
+ * Example:
+ * const xDataset = new Dataset({shape:[100, 100]})
+ * const yDataset = new Dataset({shape:[1]})
+ *
+ * const xyDataset = zip({xs: xDataset, ys: yDataset})
+ *
+ * model.fitDataset(xyDataset, {});
+ *
+ * @param {[key]:Dataset}
+ * @returns Zip
+ */
 function zip(objects) {
     return new Zip(objects);
 }
