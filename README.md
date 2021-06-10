@@ -49,6 +49,6 @@ yDataset.destroy();
 
 - [x] Zip datasets
 - [x] Write cache header
-- [ ] Read cache header
+- [x] Read cache header
 - [ ] Batch, shuffle, repeat, skip, take
 - [x] Int32, Uint8 types
