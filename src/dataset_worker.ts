@@ -2,23 +2,11 @@ import {promises as fsPromises } from 'fs'
 import * as fs from 'fs'
 import * as tfCore from '@tensorflow/tfjs-core'
 import * as lz4 from 'lz4'
-import {parentPort, workerData} from 'worker_threads'
+import {parentPort, workerData, isMainThread} from 'worker_threads'
 import { TypedArray } from '@tensorflow/tfjs-core'
-import { WorkerData, Dtype } from './dataset'
-
-let uniqueId = 0;
+import { WorkerData, Dtype, TYPEIDS, parseHeaderBuffer } from './dataset'
 
 
-const TYPEIDS = {
-    'Float32Array':2,
-    'Uint8Array':8,
-    'Buffer':9,
-    'Int8Array':10,
-    'Uint16Array':11,
-    'Int16Array':12,
-    'Uint32Array':13,
-    'Int32Array':14,
-}
 interface WriteOperation {
     write: Function
     data: Buffer
@@ -37,7 +25,6 @@ class Dataset {
     compressLevel:number
     f?: fs.promises.FileHandle
     _p: number
-    fileOpen: Promise<void | fs.promises.FileHandle>
     list: BigUint64Array[]
     cache:any
     writeQueue: WriteOperation[]
@@ -47,11 +34,15 @@ class Dataset {
     decompressBuf:Buffer
     inputSize = 1;
     type:Dtype
-    constructor(params: WorkerData = {}) {
-        this.name = params.name || String(uniqueId++);
+    dataInfoProto:BigUint64Array
+    initialized?: Promise<void>
+    needCreate:boolean
+    constructor(params: WorkerData) {
+        this.name = params.name;
         this.dataFile = (this.name) + '.bin'
         this.type = params.type||'Float32Array';
 
+        this.needCreate = params.needCreate;
         let mainType = global[this.type];
         this.compressLevel = typeof params.compressLevel === 'number' ? params.compressLevel : 1;
 
@@ -77,12 +68,12 @@ class Dataset {
         
         this.compressBuf = Buffer.alloc(lz4.encodeBound(this.inputSize * mainType.BYTES_PER_ELEMENT * 1.5));
         this.decompressBuf = Buffer.alloc(this.compressBuf.length);
-
-        this.fileOpen = fsPromises.open(this.dataFile, 'a+').then((f) => {
-            this.f = f;
-            //clear file
-            return this.f.truncate(0)
-        });
+        //position + lenght+ flags+shape
+        this.dataInfoProto = new BigUint64Array(1+1+1+ 6)
+        this.dataInfoProto[2] = BigInt(TYPEIDS[this.type])
+        let shapebuf = new Uint32Array(12)
+        shapebuf.set(shape, 0);
+        Buffer.from(this.dataInfoProto.buffer,this.dataInfoProto.byteOffset, this.dataInfoProto.byteLength).set(Buffer.from(shapebuf.buffer,shapebuf.byteOffset, shapebuf.byteLength), 3*8)
 
         this.list = [];
 
@@ -90,21 +81,63 @@ class Dataset {
 
         this.writeQueue = [];
         this.writing = false;
+        this.initialized = this.init(parentPort as any)
+    }
+    async init (parentPort: MessagePort):Promise<void> {
+       
+            this.f = await fs.promises.open((this.name) + '.bin', 'a+');
+            if (this.needCreate) {
+                await this.f.truncate(0);
+                parentPort.postMessage({ id:-1, data: 0 });
+            }else {
+                let header = await fs.promises.readFile((this.name) + '.ndlt');
+                let parsed
+                try{
+                    parsed = parseHeaderBuffer(this.name, header)
+                }catch(err){
+                    console.log('err: ', err);
+                    parentPort.postMessage({ id:-1, error: err });
+                    return;
+                }
+                if (parsed.params.type !== this.type) {
+                    throw new Error('Type not equal');
+                }
+                if (parsed.params.compressLevel !== this.compressLevel) {
+                    throw new Error('compressLevel not equal');
+                }
+                this.list = parsed.list;
+
+                parentPort.postMessage({ id:-1, data: parsed.list.length });
+            }
+       
     }
     async writeHeaderFile() {
 
         let headerFile = (this.name) + '.ndlt'
         let f = fs.createWriteStream(headerFile);
 
-        let magicSymbol = Buffer.from('ndlt')
-        let shapeSerialized = Buffer.from(JSON.stringify(this.shape));
-        let header = Buffer.concat([magicSymbol, Buffer.from(new Uint32Array([shapeSerialized.length])), shapeSerialized, Buffer.from([this.compressLevel, 0, 0, 0, 0])]);
+        let magicSymbol = Buffer.from('ndlt');
+        let shapeSerialized = new Uint32Array(12)
+        shapeSerialized.set(this.shape, 0)
+        let shapeBuf = Buffer.from(shapeSerialized.buffer, shapeSerialized.byteOffset, shapeSerialized.byteLength)
+        
+        let count = new BigUint64Array([BigInt(this.list.length)])
+        let header = Buffer.concat([magicSymbol, shapeBuf, Buffer.from([this.compressLevel, TYPEIDS[this.type], 0, 0]), Buffer.from(count.buffer,count.byteOffset,count.byteLength)]);
         f.write(header);
 
+
+
+        let out = [];
         for (let i = 0; i !== this.list.length; i++) {
             let dataInfo = this.list[i]
-            f.write(Buffer.from(dataInfo.buffer, dataInfo.byteOffset, dataInfo.byteLength))
+            out.push(Buffer.from(dataInfo.buffer, dataInfo.byteOffset, dataInfo.byteLength))
         }
+        
+        let input = Buffer.concat(out)
+        let output = Buffer.alloc(lz4.encodeBound(input.length))
+
+        let length = lz4.encodeBlock(input, output)
+        f.write(output.subarray(0, length));
         f.end();
         await new Promise((res) => {
             f.on('finish', res)
@@ -145,11 +178,11 @@ class Dataset {
         let p = this._p;
         this._p += length;
 
-        let dataInfo = new BigUint64Array([BigInt(p), BigInt(length), BigInt(TYPEIDS[this.type]), 0n]);
+        let dataInfo = this.dataInfoProto.slice(0);
+        dataInfo[0] = BigInt(p);
+        dataInfo[1] = BigInt(length);
 
         this.list.push(dataInfo);
-
-
 
         this.cache[p] = { writeData }
         this.writeQueue.push({
@@ -168,7 +201,7 @@ class Dataset {
         })
 
 
-        await this.fileOpen;
+        await this.initialized;
         //TODO batch write
         //if (true) {
             if (!this.writing) {
@@ -186,7 +219,7 @@ class Dataset {
         //     })
         //     console.log('writeQueueLength: ', writeQueueLength);
         //     if ((writeQueueLength + writeData.length) > (1024 * 1024 * 4)) {
-        //         await this.fileOpen;
+        //         await this.initialized;
         //         let writing = this.f.write(Buffer.concat(this.writeQueue.concat([writeData])), 0, writeQueueLength + writeData.length, p)//TODO, //TODO);
         //         await writing;
         //         Object.keys(this.cache).forEach((key) => {
@@ -204,7 +237,7 @@ class Dataset {
     }
     async sync() {
 
-        await this.fileOpen;
+        await this.initialized;
         let promises = Object.keys(this.cache).map(_p => {
             let p = Number(_p);
             let data = this.cache[_p].writeData
@@ -237,7 +270,7 @@ class Dataset {
         return new mainType(this.buf.buffer, this.buf.byteOffset, this.buf.byteLength/mainType.BYTES_PER_ELEMENT )
     }
     async forEachAsync(func: Function) {
-        await this.fileOpen;
+        await this.initialized;
 
         for (let i = 0; i !== this.list.length; i++) {
 
@@ -255,11 +288,14 @@ class Dataset {
     }
 }
 
+if(!isMainThread){
 let dataset = new Dataset(workerData);
+
 
 if(!parentPort){
     throw new Error('parentPort not found')
 }
+//dataset.initialized = dataset.init(parentPort as any)
 parentPort.on('message', async ({id, op, data}: Message) => {
     if(!parentPort){
         throw new Error('parentPort not found')
@@ -299,3 +335,4 @@ parentPort.on('message', async ({id, op, data}: Message) => {
     }
 });
 
+}

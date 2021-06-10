@@ -1,6 +1,6 @@
 let tf = require('@tensorflow/tfjs')
 let data = require('./data')
-let { Dataset, zip } = require('./../src/dataset')
+let { Dataset, zip, openDataset } = require('./../src/dataset')
 let fs = require('fs')
 
 
@@ -59,6 +59,19 @@ async function test() {
         throw new Error('test.ndlt file small')
     }
     console.log('success')
+    dataset.destroy();
+
+    dataset = await openDataset('test')
+
+    i = 0;
+    await dataset.forEachAsync((tensor) => {
+        let j = i++;
+        let data = tensor.dataSync();
+        if ((data[0] | 0) != (j | 0) || (data[1] | 0) != 0 || (data[2] | 0) != 1 || (data[3] | 0) != 2 || (data[4] | 0) != 3 || (data[5] | 0) != (j | 0)) {
+            throw new Error('' + j + ' not equal' + data.slice(0, 6))
+
+        }
+    })
     dataset.destroy(true);
 
     var normalDataset;

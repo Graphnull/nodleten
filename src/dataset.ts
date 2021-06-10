@@ -2,20 +2,31 @@ import * as tfData from '@tensorflow/tfjs-data'
 import * as tfCore from '@tensorflow/tfjs-core'
 import * as path from 'path'
 import * as fs from 'fs'
+import * as lz4 from 'lz4'
 import {
     Worker, isMainThread, parentPort, workerData
 } from 'worker_threads'
 import { TypedArray } from '@tensorflow/tfjs-core';
 
 let uniqueId = 0;
-
+export const TYPEIDS = {
+    'Float32Array':2,
+    'Uint8Array':8,
+    'Buffer':9,
+    'Int8Array':10,
+    'Uint16Array':11,
+    'Int16Array':12,
+    'Uint32Array':13,
+    'Int32Array':14,
+}
 export type Dtype = 'Float32Array'|'Uint8Array'|'Buffer'|'Int8Array'|'Uint16Array'|'Int16Array'|'Uint32Array'|'Int32Array'
 export interface WorkerData {
-    name?: string,
-    dataFile?: string,
+    name: string,
     shape?: number[],
     compressLevel?: number,
-    type?:Dtype
+    type?:Dtype,
+    count?:number,
+    needCreate:boolean
 }
 
 interface Prefetch {
@@ -44,6 +55,47 @@ interface ZipTypedArrays {
     [thingName: string]: TypedArray
 }
 
+export let parseHeaderBuffer =(name:string, header:Buffer)=>{
+    
+    let magic = Buffer.from('ndlt')
+    if(Buffer.compare(header.slice(0,magic.length),magic)!==0){
+        console.log('header: ', header);
+        throw new Error(`${name+'.ndlt'} is not header file`)
+    }
+    let shape = Array.from(new Uint32Array(header.buffer, header.byteOffset+magic.length, 12))
+    shape = shape.filter(v=>v)
+
+    let compressLevel = header[4+12*Uint32Array.BYTES_PER_ELEMENT]
+    let typeId = header[4+12*Uint32Array.BYTES_PER_ELEMENT + 1]
+
+    let type = Object.keys(TYPEIDS).find((key)=>((TYPEIDS as any)[key]===typeId)) as Dtype|undefined
+    if(!type){
+        throw new Error('Undefined type of data')
+    }
+    let count = Number((new BigUint64Array(header.buffer,header.byteOffset+4+12*Uint32Array.BYTES_PER_ELEMENT+1+1 +2,1))[0])
+
+    let params: WorkerData = {
+        name,
+        shape,
+        compressLevel,
+        type,
+        count,
+        needCreate:false
+    }
+    let list:BigUint64Array[] = [];
+    let headLength = 4+12*Uint32Array.BYTES_PER_ELEMENT+1+1 +2 +8;
+    if(header.length!==headLength){
+        let listArray = new BigUint64Array(count*9)
+        let decodedLength = lz4.decodeBlock(header.subarray(headLength), Buffer.from(listArray.buffer, listArray.byteOffset, listArray.byteLength))
+        if(decodedLength!==count*9*8){
+            throw new Error('It is not possible to decompress the data')
+        }
+        for(let i =0;i!==count;i++){
+            list.push(listArray.subarray(i*9,i*9+9))
+        }
+    }
+    return {params, list};
+}
 let uniqueCommandId = 0;
 
 /**
@@ -66,12 +118,14 @@ export class Dataset {
     list: number[]
     inputSize = 1;
     type:Dtype;
+    initializing:Promise<void>
+    needCreate:boolean
     constructor(params: WorkerData) {
         let workerData: WorkerData = params || {};
         workerData.name = params.name || String(uniqueId++);
         this.name = workerData.name;
         this.dataFile = (this.name) + '.bin'
-
+        params.needCreate = this.needCreate = typeof params.needCreate==='boolean'?params.needCreate:true;
         let shape = params.shape;
         if (!Array.isArray(shape)) {
             throw new Error(JSON.stringify(shape) + ' shape is not number array');
@@ -94,6 +148,23 @@ export class Dataset {
         }) as DatasetWorker;
         this.worker.dataI = 0;
         this.list = [];
+        if(params.count){
+            for(let i=0;i!==params.count;i++){
+                this.list.push(this.worker.dataI++);
+            }
+        }
+        this.initializing = new Promise((res,rej)=>{
+            let onMessage = (message:any) => {
+                if (message.error) {
+                    rej(message.error);
+                }
+                if (message.id === -1) {
+                    this.worker.off('message', onMessage);
+                    res();
+                }
+            };
+            this.worker.on('message', onMessage);
+        })
     }
     private async _sendCommand (op:string, data?: any, transferableObjects?: any[]): Promise<any>{
         let commandId = uniqueCommandId++;
@@ -175,7 +246,22 @@ export class Dataset {
         }
     }
 }
+export async function openDataset(name:string): Promise<Dataset>{
 
+    let f = await fs.promises.open(name+'.ndlt','r');
+
+    //magic + shapeinfo+ compressioninfo + typeinfo + other+ count
+    let len = 4+12*Uint32Array.BYTES_PER_ELEMENT+1+1 +2+8
+    let header = Buffer.alloc(len)
+    await f.read(header,0, len, 0);
+    await f.close();
+
+    let { params } = parseHeaderBuffer(name, header);
+
+    let dataset = new Dataset(params)
+    await dataset.initializing;
+    return dataset;
+}
 
 class Zip {
     private datasets: Datasets

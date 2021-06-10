@@ -19,12 +19,61 @@ var __importStar = (this && this.__importStar) || function (mod) {
     return result;
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.zip = exports.Dataset = void 0;
+exports.zip = exports.openDataset = exports.Dataset = exports.parseHeaderBuffer = exports.TYPEIDS = void 0;
 const tfCore = __importStar(require("@tensorflow/tfjs-core"));
 const path = __importStar(require("path"));
 const fs = __importStar(require("fs"));
+const lz4 = __importStar(require("lz4"));
 const worker_threads_1 = require("worker_threads");
 let uniqueId = 0;
+exports.TYPEIDS = {
+    'Float32Array': 2,
+    'Uint8Array': 8,
+    'Buffer': 9,
+    'Int8Array': 10,
+    'Uint16Array': 11,
+    'Int16Array': 12,
+    'Uint32Array': 13,
+    'Int32Array': 14,
+};
+let parseHeaderBuffer = (name, header) => {
+    let magic = Buffer.from('ndlt');
+    if (Buffer.compare(header.slice(0, magic.length), magic) !== 0) {
+        console.log('header: ', header);
+        throw new Error(`${name + '.ndlt'} is not header file`);
+    }
+    let shape = Array.from(new Uint32Array(header.buffer, header.byteOffset + magic.length, 12));
+    shape = shape.filter(v => v);
+    let compressLevel = header[4 + 12 * Uint32Array.BYTES_PER_ELEMENT];
+    let typeId = header[4 + 12 * Uint32Array.BYTES_PER_ELEMENT + 1];
+    let type = Object.keys(exports.TYPEIDS).find((key) => (exports.TYPEIDS[key] === typeId));
+    if (!type) {
+        throw new Error('Undefined type of data');
+    }
+    let count = Number((new BigUint64Array(header.buffer, header.byteOffset + 4 + 12 * Uint32Array.BYTES_PER_ELEMENT + 1 + 1 + 2, 1))[0]);
+    let params = {
+        name,
+        shape,
+        compressLevel,
+        type,
+        count,
+        needCreate: false
+    };
+    let list = [];
+    let headLength = 4 + 12 * Uint32Array.BYTES_PER_ELEMENT + 1 + 1 + 2 + 8;
+    if (header.length !== headLength) {
+        let listArray = new BigUint64Array(count * 9);
+        let decodedLength = lz4.decodeBlock(header.subarray(headLength), Buffer.from(listArray.buffer, listArray.byteOffset, listArray.byteLength));
+        if (decodedLength !== count * 9 * 8) {
+            throw new Error('It is not possible to decompress the data');
+        }
+        for (let i = 0; i !== count; i++) {
+            list.push(listArray.subarray(i * 9, i * 9 + 9));
+        }
+    }
+    return { params, list };
+};
+exports.parseHeaderBuffer = parseHeaderBuffer;
 let uniqueCommandId = 0;
 /**
  * Create a Dataset with disk cache
@@ -45,6 +94,7 @@ class Dataset {
         workerData.name = params.name || String(uniqueId++);
         this.name = workerData.name;
         this.dataFile = (this.name) + '.bin';
+        params.needCreate = this.needCreate = typeof params.needCreate === 'boolean' ? params.needCreate : true;
         let shape = params.shape;
         if (!Array.isArray(shape)) {
             throw new Error(JSON.stringify(shape) + ' shape is not number array');
@@ -63,6 +113,23 @@ class Dataset {
         });
         this.worker.dataI = 0;
         this.list = [];
+        if (params.count) {
+            for (let i = 0; i !== params.count; i++) {
+                this.list.push(this.worker.dataI++);
+            }
+        }
+        this.initializing = new Promise((res, rej) => {
+            let onMessage = (message) => {
+                if (message.error) {
+                    rej(message.error);
+                }
+                if (message.id === -1) {
+                    this.worker.off('message', onMessage);
+                    res();
+                }
+            };
+            this.worker.on('message', onMessage);
+        });
     }
     async _sendCommand(op, data, transferableObjects) {
         let commandId = uniqueCommandId++;
@@ -138,6 +205,19 @@ class Dataset {
     }
 }
 exports.Dataset = Dataset;
+async function openDataset(name) {
+    let f = await fs.promises.open(name + '.ndlt', 'r');
+    //magic + shapeinfo+ compressioninfo + typeinfo + other+ count
+    let len = 4 + 12 * Uint32Array.BYTES_PER_ELEMENT + 1 + 1 + 2 + 8;
+    let header = Buffer.alloc(len);
+    await f.read(header, 0, len, 0);
+    await f.close();
+    let { params } = exports.parseHeaderBuffer(name, header);
+    let dataset = new Dataset(params);
+    await dataset.initializing;
+    return dataset;
+}
+exports.openDataset = openDataset;
 class Zip {
     constructor(datasets) {
         this.datasets = datasets;
