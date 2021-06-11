@@ -76,7 +76,7 @@ async function test() {
 
     var normalDataset;
     try{
-        normalDataset = new Dataset({name:'normal',type:'Uint8Array', shape:[768, 1024,3]});
+        normalDataset = new Dataset({name:'normal', shape:[768, 1024,3]});
         await normalDataset.push(new Uint8Array(10))
         throw new Error('not')
     }catch(err){
@@ -84,14 +84,7 @@ async function test() {
             throw new Error('Not acceptable lenght')
         }
     }
-    try{
-        await normalDataset.push(new Float32Array(768*1024*3))
-        throw new Error('not')
-    }catch(err){
-        if(err.message==='not'){
-            throw new Error('Not acceptable lenght')
-        }
-    }
+
     await normalDataset.push(Buffer.alloc(768*1024*3));
 
     let normZip = zip({xs:normalDataset, ys: normalDataset})
@@ -112,7 +105,6 @@ async function test() {
 
 
     const input = tf.input({ shape: [768, 1024, 3] });
-    //let cast = tf.cast('float32').apply(input);
     const drop = tf.layers.dropout({ rate:0.05 }).apply(input);
     const conv = tf.layers.conv2d({ filters: 3, kernelSize: [1,1], activation: 'elu', padding: 'same' }).apply(drop);
     var model = tf.model({ inputs: input, outputs: conv })

@@ -62,6 +62,9 @@
 					<h1>NODLETEN</h1>
 				</a>
 				<p>Node tfjs distribution learning tools</p>
+				<a href="#docs-httpsgraphnullgithubionodleten" id="docs-httpsgraphnullgithubionodleten" style="color: inherit; text-decoration: none;">
+					<h1>Docs <a href="https://graphnull.github.io/nodleten/">https://graphnull.github.io/nodleten/</a></h1>
+				</a>
 				<a href="#dataset" id="dataset" style="color: inherit; text-decoration: none;">
 					<h1>Dataset</h1>
 				</a>
@@ -73,8 +76,8 @@
 				<pre><code class="language-javascript"><span style="color: #0000FF">let</span><span style="color: #000000"> {</span><span style="color: #001080">Dataset</span><span style="color: #000000">, </span><span style="color: #001080">zip</span><span style="color: #000000">} = </span><span style="color: #795E26">require</span><span style="color: #000000">(</span><span style="color: #A31515">&#039;nodleten&#039;</span><span style="color: #000000">)</span>
 
 <span style="color: #0000FF">let</span><span style="color: #000000"> </span><span style="color: #001080">inpSize</span><span style="color: #000000"> = </span><span style="color: #098658">28</span><span style="color: #000000"> * </span><span style="color: #098658">28</span><span style="color: #000000">; </span>
-<span style="color: #0000FF">const</span><span style="color: #000000"> </span><span style="color: #0070C1">xDataset</span><span style="color: #000000"> = </span><span style="color: #0000FF">new</span><span style="color: #000000"> </span><span style="color: #795E26">Dataset</span><span style="color: #000000">({</span><span style="color: #001080">shape:</span><span style="color: #000000">[</span><span style="color: #001080">inpSize</span><span style="color: #000000">]})</span>
-<span style="color: #0000FF">const</span><span style="color: #000000"> </span><span style="color: #0070C1">yDataset</span><span style="color: #000000"> = </span><span style="color: #0000FF">new</span><span style="color: #000000"> </span><span style="color: #795E26">Dataset</span><span style="color: #000000">({</span><span style="color: #001080">shape:</span><span style="color: #000000">[</span><span style="color: #098658">1</span><span style="color: #000000">]})</span>
+<span style="color: #0000FF">const</span><span style="color: #000000"> </span><span style="color: #0070C1">xDataset</span><span style="color: #000000"> = </span><span style="color: #0000FF">new</span><span style="color: #000000"> </span><span style="color: #795E26">Dataset</span><span style="color: #000000">({</span><span style="color: #001080">shape:</span><span style="color: #000000">[</span><span style="color: #001080">inpSize</span><span style="color: #000000">], </span><span style="color: #001080">type:</span><span style="color: #A31515">&#039;Float32Array&#039;</span><span style="color: #000000">})</span>
+<span style="color: #0000FF">const</span><span style="color: #000000"> </span><span style="color: #0070C1">yDataset</span><span style="color: #000000"> = </span><span style="color: #0000FF">new</span><span style="color: #000000"> </span><span style="color: #795E26">Dataset</span><span style="color: #000000">({</span><span style="color: #001080">shape:</span><span style="color: #000000">[</span><span style="color: #098658">1</span><span style="color: #000000">], </span><span style="color: #001080">type:</span><span style="color: #A31515">&#039;Float32Array&#039;</span><span style="color: #000000">})</span>
 <span style="color: #000000"> </span>
 <span style="color: #008000">// generate dataset</span>
 <span style="color: #AF00DB">for</span><span style="color: #000000">(</span><span style="color: #0000FF">let</span><span style="color: #000000"> </span><span style="color: #001080">i</span><span style="color: #000000">=</span><span style="color: #098658">0</span><span style="color: #000000">;</span><span style="color: #001080">i</span><span style="color: #000000">!==</span><span style="color: #098658">300</span><span style="color: #000000">;</span><span style="color: #001080">i</span><span style="color: #000000">++){</span>
@@ -108,9 +111,9 @@
 				<ul>
 					<li><input checked="" disabled="" type="checkbox"> Zip datasets</li>
 					<li><input checked="" disabled="" type="checkbox"> Write cache header</li>
-					<li><input disabled="" type="checkbox"> Read cache header</li>
+					<li><input checked="" disabled="" type="checkbox"> Read cache header</li>
 					<li><input disabled="" type="checkbox"> Batch, shuffle, repeat, skip, take</li>
-					<li><input disabled="" type="checkbox"> Int32, Uint8 types</li>
+					<li><input checked="" disabled="" type="checkbox"> Int32, Uint8 types</li>
 				</ul>
 			</div>
 		</div>
@@ -126,6 +129,33 @@
 				<ul class="before-current">
 					<li class=" tsd-kind-class">
 						<a href="classes/dataset.html" class="tsd-kind-icon">Dataset</a>
+					</li>
+					<li class=" tsd-kind-interface">
+						<a href="interfaces/workerdata.html" class="tsd-kind-icon">Worker<wbr>Data</a>
+					</li>
+					<li class=" tsd-kind-type-alias">
+						<a href="modules.html#dtype" class="tsd-kind-icon">Dtype</a>
+					</li>
+					<li class=" tsd-kind-variable">
+						<a href="modules.html#datatypemap" class="tsd-kind-icon">Data<wbr>Type<wbr>Map</a>
+					</li>
+					<li class=" tsd-kind-variable">
+						<a href="modules.html#retypeids" class="tsd-kind-icon">ReTYPEIDS</a>
+					</li>
+					<li class=" tsd-kind-variable">
+						<a href="modules.html#tftypes" class="tsd-kind-icon">TFTypes</a>
+					</li>
+					<li class=" tsd-kind-variable">
+						<a href="modules.html#typeids" class="tsd-kind-icon">TYPEIDS</a>
+					</li>
+					<li class=" tsd-kind-variable">
+						<a href="modules.html#acceptabletypedarrays" class="tsd-kind-icon">acceptable<wbr>Typed<wbr>Arrays</a>
+					</li>
+					<li class=" tsd-kind-function">
+						<a href="modules.html#opendataset" class="tsd-kind-icon">open<wbr>Dataset</a>
+					</li>
+					<li class=" tsd-kind-function">
+						<a href="modules.html#parseheaderbuffer" class="tsd-kind-icon">parse<wbr>Header<wbr>Buffer</a>
 					</li>
 					<li class=" tsd-kind-function">
 						<a href="modules.html#zip" class="tsd-kind-icon">zip</a>
@@ -146,6 +176,10 @@
 			</ul>
 			<ul class="tsd-legend">
 				<li class="tsd-kind-property tsd-parent-kind-class tsd-is-private"><span class="tsd-kind-icon">Private property</span></li>
+				<li class="tsd-kind-method tsd-parent-kind-class tsd-is-private"><span class="tsd-kind-icon">Private method</span></li>
+			</ul>
+			<ul class="tsd-legend">
+				<li class="tsd-kind-property tsd-parent-kind-interface"><span class="tsd-kind-icon">Property</span></li>
 			</ul>
 		</div>
 	</div>

@@ -29,9 +29,7 @@ class Dataset {
         this.inputSize = 1;
         this.name = params.name;
         this.dataFile = (this.name) + '.bin';
-        this.type = params.type || 'Float32Array';
         this.needCreate = params.needCreate;
-        let mainType = global[this.type];
         this.compressLevel = typeof params.compressLevel === 'number' ? params.compressLevel : 1;
         this.f; // file with dataset
         this._p = 0; //file position
@@ -46,13 +44,12 @@ class Dataset {
             this.inputSize *= dim;
         });
         this.shape = shape;
-        this.buf = Buffer.alloc(this.inputSize * mainType.BYTES_PER_ELEMENT);
-        this.compressBuf = Buffer.alloc(lz4.encodeBound(this.inputSize * mainType.BYTES_PER_ELEMENT * 1.5));
+        this.buf = Buffer.alloc(this.inputSize * 4);
+        this.compressBuf = Buffer.alloc(lz4.encodeBound(this.inputSize * 4 * 1.5));
         this.decompressBuf = Buffer.alloc(this.compressBuf.length);
         //position + lenght+ flags+shape
-        this.dataInfoProto = new BigUint64Array(1 + 1 + 1 + 6);
-        this.dataInfoProto[2] = BigInt(dataset_1.TYPEIDS[this.type]);
-        let shapebuf = new Uint32Array(12);
+        this.dataInfoProto = new BigUint64Array(1 + 1 + 1 + 4);
+        let shapebuf = new Uint32Array(8);
         shapebuf.set(shape, 0);
         Buffer.from(this.dataInfoProto.buffer, this.dataInfoProto.byteOffset, this.dataInfoProto.byteLength).set(Buffer.from(shapebuf.buffer, shapebuf.byteOffset, shapebuf.byteLength), 3 * 8);
         this.list = [];
@@ -74,12 +71,8 @@ class Dataset {
                 parsed = dataset_1.parseHeaderBuffer(this.name, header);
             }
             catch (err) {
-                console.log('err: ', err);
                 parentPort.postMessage({ id: -1, error: err });
                 return;
-            }
-            if (parsed.params.type !== this.type) {
-                throw new Error('Type not equal');
             }
             if (parsed.params.compressLevel !== this.compressLevel) {
                 throw new Error('compressLevel not equal');
@@ -92,11 +85,11 @@ class Dataset {
         let headerFile = (this.name) + '.ndlt';
         let f = fs.createWriteStream(headerFile);
         let magicSymbol = Buffer.from('ndlt');
-        let shapeSerialized = new Uint32Array(12);
+        let shapeSerialized = new Uint32Array(8);
         shapeSerialized.set(this.shape, 0);
         let shapeBuf = Buffer.from(shapeSerialized.buffer, shapeSerialized.byteOffset, shapeSerialized.byteLength);
         let count = new BigUint64Array([BigInt(this.list.length)]);
-        let header = Buffer.concat([magicSymbol, shapeBuf, Buffer.from([this.compressLevel, dataset_1.TYPEIDS[this.type], 0, 0]), Buffer.from(count.buffer, count.byteOffset, count.byteLength)]);
+        let header = Buffer.concat([magicSymbol, shapeBuf, Buffer.from([this.compressLevel, 0, 0, 0]), Buffer.from(count.buffer, count.byteOffset, count.byteLength)]);
         f.write(header);
         let out = [];
         for (let i = 0; i !== this.list.length; i++) {
@@ -123,14 +116,16 @@ class Dataset {
     skip() { throw new Error('not implemented'); }
     take() { throw new Error('not implemented'); }
     toArray() { throw new Error('not implemented'); }
-    async push(objs) {
-        if (!objs) {
+    async push(data) {
+        if (!data) {
             throw new Error('Data not found');
         }
-        if (objs.length !== this.inputSize) {
-            throw new Error(`Input size have ${objs.length}. expected ${this.inputSize}`);
+        if (dataset_1.acceptableTypedArrays.indexOf(data.constructor.name) < 0) {
+            throw new Error(`Input object expected ${data.constructor.name} type not accept`);
         }
-        let data = objs;
+        if (data.length !== this.inputSize) {
+            throw new Error(`Input size have ${data.length}. expected ${this.inputSize}`);
+        }
         let length = lz4.encodeBlock(Buffer.from(data.buffer, data.byteOffset, data.byteLength), this.compressBuf);
         if (length > this.compressBuf.length) {
             throw new Error(`compressBuf.length (${this.compressBuf.length})<compressedSize (${length})`);
@@ -143,6 +138,7 @@ class Dataset {
         let dataInfo = this.dataInfoProto.slice(0);
         dataInfo[0] = BigInt(p);
         dataInfo[1] = BigInt(length);
+        dataInfo[2] = BigInt(dataset_1.TYPEIDS[data.constructor.name]);
         this.list.push(dataInfo);
         this.cache[p] = { writeData };
         this.writeQueue.push({
@@ -213,12 +209,20 @@ class Dataset {
             await this.f.read(temp, 0, len, p);
             uncompressedSize = lz4.decodeBlock(temp, out);
         }
-        if (uncompressedSize !== out.length) {
-            console.log(p, len, out.length, this.cache[p]);
-            throw new Error(`uncompressedSize (${uncompressedSize}) !== this.buf.byteLength (${this.buf.byteLength})`);
+        let mainType = dataset_1.ReTYPEIDS[Number(dataInfo[2])];
+        if (!mainType) {
+            throw new Error('Unknown type of data');
         }
-        let mainType = global[this.type];
-        return new mainType(this.buf.buffer, this.buf.byteOffset, this.buf.byteLength / mainType.BYTES_PER_ELEMENT);
+        if (uncompressedSize !== this.inputSize * mainType.BYTES_PER_ELEMENT) {
+            throw new Error(`UncompressedSize (${uncompressedSize}) !== out.length (${this.inputSize * mainType.BYTES_PER_ELEMENT})`);
+        }
+        if (mainType instanceof Float32Array) {
+            return new mainType(this.buf.buffer, this.buf.byteOffset, uncompressedSize / mainType.BYTES_PER_ELEMENT);
+        }
+        else {
+            let innerType = new mainType(this.buf.buffer, this.buf.byteOffset, uncompressedSize / mainType.BYTES_PER_ELEMENT);
+            return new Int32Array(innerType);
+        }
     }
     async forEachAsync(func) {
         await this.initialized;
@@ -247,7 +251,6 @@ if (!worker_threads_1.isMainThread) {
                 case ('get'): {
                     let dataInfo = dataset.list[data];
                     if (!dataInfo) {
-                        console.log('ddddd', dataset.list.length);
                         throw new Error(`data in ${data} index not found`);
                     }
                     let result = await dataset.get(dataInfo);

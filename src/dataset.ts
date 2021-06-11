@@ -1,4 +1,3 @@
-import * as tfData from '@tensorflow/tfjs-data'
 import * as tfCore from '@tensorflow/tfjs-core'
 import * as path from 'path'
 import * as fs from 'fs'
@@ -10,21 +9,39 @@ import { TypedArray } from '@tensorflow/tfjs-core';
 
 let uniqueId = 0;
 export const TYPEIDS = {
-    'Float32Array':2,
-    'Uint8Array':8,
-    'Buffer':9,
-    'Int8Array':10,
-    'Uint16Array':11,
-    'Int16Array':12,
-    'Uint32Array':13,
-    'Int32Array':14,
+    'Float32Array':1,
+    'Int32Array':2,
+    'Uint8Array':3,
+    'Uint32Array':4,
+    'Buffer':5,
+    'Int8Array':6,
+    'Uint16Array':7,
+    'Int16Array':8,
 }
+
+export const ReTYPEIDS = [null, Float32Array, Int32Array, Uint8Array, Uint32Array, Buffer, Int8Array, Uint16Array, Int16Array];
+
+export let acceptableTypedArrays = Object.keys(TYPEIDS);
+export const TFTypes = {
+    float32:1,
+    int32:2,
+    bool:3,
+    complex64:4,
+    string:5
+    }
+export const DataTypeMap = {
+    float32: Float32Array,
+    int32: Int32Array,
+    bool: Uint8Array,
+    complex64: Float32Array,
+    string: String
+}
+
 export type Dtype = 'Float32Array'|'Uint8Array'|'Buffer'|'Int8Array'|'Uint16Array'|'Int16Array'|'Uint32Array'|'Int32Array'
 export interface WorkerData {
     name: string,
     shape?: number[],
     compressLevel?: number,
-    type?:Dtype,
     count?:number,
     needCreate:boolean
 }
@@ -42,10 +59,6 @@ interface ZipResult {
     [thingName: string]: tfCore.Tensor
 }
 
-interface TensorBuffers {
-    [thingName: string]: tfCore.TensorBuffer<any, any>
-}
-
 interface Datasets {
     [thingName: string]: Dataset
 }
@@ -59,39 +72,33 @@ export let parseHeaderBuffer =(name:string, header:Buffer)=>{
     
     let magic = Buffer.from('ndlt')
     if(Buffer.compare(header.slice(0,magic.length),magic)!==0){
-        console.log('header: ', header);
         throw new Error(`${name+'.ndlt'} is not header file`)
     }
-    let shape = Array.from(new Uint32Array(header.buffer, header.byteOffset+magic.length, 12))
+    // 8 dim shape
+    let shape = Array.from(new Uint32Array(header.buffer, header.byteOffset+magic.length, 8))
     shape = shape.filter(v=>v)
 
-    let compressLevel = header[4+12*Uint32Array.BYTES_PER_ELEMENT]
-    let typeId = header[4+12*Uint32Array.BYTES_PER_ELEMENT + 1]
+    let compressLevel = header[4+8*Uint32Array.BYTES_PER_ELEMENT]
 
-    let type = Object.keys(TYPEIDS).find((key)=>((TYPEIDS as any)[key]===typeId)) as Dtype|undefined
-    if(!type){
-        throw new Error('Undefined type of data')
-    }
-    let count = Number((new BigUint64Array(header.buffer,header.byteOffset+4+12*Uint32Array.BYTES_PER_ELEMENT+1+1 +2,1))[0])
+    let count = Number((new BigUint64Array(header.buffer,header.byteOffset+4+8*Uint32Array.BYTES_PER_ELEMENT+1+1 +2,1))[0])
 
     let params: WorkerData = {
         name,
         shape,
         compressLevel,
-        type,
         count,
         needCreate:false
     }
     let list:BigUint64Array[] = [];
-    let headLength = 4+12*Uint32Array.BYTES_PER_ELEMENT+1+1 +2 +8;
+    let headLength = 4+8*Uint32Array.BYTES_PER_ELEMENT+1+1 +2 +8;
     if(header.length!==headLength){
-        let listArray = new BigUint64Array(count*9)
+        let listArray = new BigUint64Array(count*7)
         let decodedLength = lz4.decodeBlock(header.subarray(headLength), Buffer.from(listArray.buffer, listArray.byteOffset, listArray.byteLength))
-        if(decodedLength!==count*9*8){
+        if(decodedLength!==count*7*8){
             throw new Error('It is not possible to decompress the data')
         }
         for(let i =0;i!==count;i++){
-            list.push(listArray.subarray(i*9,i*9+9))
+            list.push(listArray.subarray(i*7,i*7+7))
         }
     }
     return {params, list};
@@ -117,7 +124,6 @@ export class Dataset {
     private worker: DatasetWorker
     list: number[]
     inputSize = 1;
-    type:Dtype;
     initializing:Promise<void>
     needCreate:boolean
     constructor(params: WorkerData) {
@@ -138,7 +144,6 @@ export class Dataset {
         })
 
         this.shape = workerData.shape = shape;
-        this.type = workerData.type = params.type||'Float32Array';
 
 
         workerData.compressLevel = typeof params.compressLevel === 'number' ? params.compressLevel : 1;
@@ -183,8 +188,9 @@ export class Dataset {
         });
     }
     push(objs: TypedArray) {
-        if(!(objs instanceof global[this.type])){
-            throw new Error(`Input object expected ${this.type} type`)
+        
+        if(acceptableTypedArrays.indexOf(objs.constructor.name)<0){
+            throw new Error(`Input object ${objs.constructor.name} type is not accept`)
         }
         if(objs.length!==this.inputSize){
             throw new Error(`Input size have ${objs.length}. expected ${this.inputSize}`)
@@ -194,8 +200,8 @@ export class Dataset {
         return this._sendCommand('push', clone, [clone.buffer]);
     }
     send(objs: TypedArray) {
-        if(!(objs instanceof global[this.type])){
-            throw new Error(`Input object expected ${this.type} type`)
+        if(acceptableTypedArrays.indexOf(objs.constructor.name)<0){
+            throw new Error(`Input object ${objs.constructor.name} type is not accept`)
         }
         if(objs.length!==this.inputSize){
             throw new Error(`Input size have ${objs.length}. expected ${this.inputSize}`)
@@ -216,7 +222,7 @@ export class Dataset {
 
             let out = await this.get(this.list[i]);
             tfCore.tidy(() => {
-                func(tfCore.tensor(out));
+                func(tfCore.tensor(out,[1].concat(this.shape)));
             })
         }
 
@@ -251,7 +257,7 @@ export async function openDataset(name:string): Promise<Dataset>{
     let f = await fs.promises.open(name+'.ndlt','r');
 
     //magic + shapeinfo+ compressioninfo + typeinfo + other+ count
-    let len = 4+12*Uint32Array.BYTES_PER_ELEMENT+1+1 +2+8
+    let len = 4+8*Uint32Array.BYTES_PER_ELEMENT+1+1 +2+8
     let header = Buffer.alloc(len)
     await f.read(header,0, len, 0);
     await f.close();
@@ -267,7 +273,6 @@ class Zip {
     private datasets: Datasets
     private firstDataset: Dataset
     private keys: string[]
-    private tensorBuffers: TensorBuffers
     private prefetches: Prefetches
     constructor(datasets: Datasets) {
 
@@ -277,13 +282,11 @@ class Zip {
             throw new Error('dataset not found')
         }
         this.keys = Object.keys(datasets);
-        this.tensorBuffers = {};
         this.prefetches = {};
 
         this.keys.forEach(key => {
             this.prefetches[key] = [];
             let dataset = this.datasets[key]
-            this.tensorBuffers[key] = tfCore.buffer([1].concat(dataset.shape));
         })
     }
     batch() { throw new Error('not implemented') }
@@ -311,7 +314,7 @@ class Zip {
             tfCore.tidy(() => {
                 for (let k = 0; k !== this.keys.length; k++) {
                     let key = this.keys[k];
-                    out[key] = tfCore.tensor(typedArrays[key], [1, typedArrays[key].length]);
+                    out[key] =  tfCore.tensor(typedArrays[key], [1].concat(this.datasets[key].shape))
                 }
                 func(out);
             })
@@ -323,13 +326,9 @@ class Zip {
 
         return {
             next: async () => {
-                if (i % 256 === 0) {
-                    console.log('i', i);
-                }
                 if (count === i) {
                     return { value: null, done: true };
                 }
-                i++;
                 let results: ZipTypedArrays = {}
                 let getingDatas = this.keys.map(async key => {
 
@@ -382,13 +381,13 @@ class Zip {
                 let out: ZipResult = {}
                 for (let k = 0; k !== this.keys.length; k++) {
                     let key = this.keys[k];
-                    this.tensorBuffers[key].values = results[key]
-                    out[key] = this.tensorBuffers[key].toTensor();
+                    out[key] = tfCore.tensor(results[key], [1].concat(this.datasets[key].shape))// this.tensorBuffers[key].toTensor();
 
                 }
 
 
 
+                i++;
                 return { value: out, done: false };
             }
         }
