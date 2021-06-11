@@ -1,4 +1,4 @@
-let tf = require('@tensorflow/tfjs')
+let tf = require('@tensorflow/tfjs-node')
 let data = require('./data')
 let { Dataset, zip, openDataset } = require('./../src/dataset')
 let fs = require('fs')
@@ -43,8 +43,8 @@ async function test() {
 
     await dataset.writeHeaderFile();
     console.log(process.memoryUsage());
-    if (process.memoryUsage().rss > 200 * 1000 * 1000) {
-        throw new Error(`data not cached (${process.memoryUsage().rss / 1000 / 1000}>${200})`)
+    if (process.memoryUsage().rss > 300 * 1000 * 1000) {
+        throw new Error(`data not cached (${process.memoryUsage().rss / 1000 / 1000}>${300})`)
 
     }
     let files = fs.readdirSync('./')
@@ -93,6 +93,36 @@ async function test() {
         }
     }
     await normalDataset.push(Buffer.alloc(768*1024*3));
+
+    let normZip = zip({xs:normalDataset, ys: normalDataset})
+    await normZip.forEachAsync((data)=>{console.log(data)})
+    let loss = (result, output, mask, hit) => {
+        let start = result.shape.map(v=>0)
+        start[start.length-3] = start[start.length-2] = 2
+        let end = result.shape.map(v=>v)
+        end[end.length-2] = end[end.length-2] - 4
+        end[end.length-3] = end[end.length-3] - 4
+
+        return tf.pow(result.sub(output), 2)
+        .slice(start, end)
+        .mean();
+      }
+      
+    let optimizer = tf.train.adadelta(0.03);
+
+
+    const input = tf.input({ shape: [768, 1024, 3] });
+    //let cast = tf.cast('float32').apply(input);
+    const drop = tf.layers.dropout({ rate:0.05 }).apply(input);
+    const conv = tf.layers.conv2d({ filters: 3, kernelSize: [1,1], activation: 'elu', padding: 'same' }).apply(drop);
+    var model = tf.model({ inputs: input, outputs: conv })
+
+    model.compile({optimizer, loss });
+
+    await model.fitDataset(normZip, {
+        epochs:1,
+        callbacks: {onEpochEnd: (epoch, logs) => {console.log( 'onEnd',epoch, logs.loss)}}
+    });
 
     normalDataset.destroy(true)
 }
