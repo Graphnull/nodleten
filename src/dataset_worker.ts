@@ -266,7 +266,7 @@ class Dataset {
             throw new Error(`UncompressedSize (${uncompressedSize}) !== out.length (${this.inputSize*mainType.BYTES_PER_ELEMENT})`)
         }
 
-        if(mainType instanceof Float32Array){
+        if(Number(dataInfo[2]) === 1){//is Float32Array
             return new mainType(this.buf.buffer, this.buf.byteOffset, uncompressedSize/mainType.BYTES_PER_ELEMENT )
         }else{
             let innerType= new mainType(this.buf.buffer, this.buf.byteOffset, uncompressedSize/mainType.BYTES_PER_ELEMENT )
