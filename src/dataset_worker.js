@@ -216,7 +216,7 @@ class Dataset {
         if (uncompressedSize !== this.inputSize * mainType.BYTES_PER_ELEMENT) {
             throw new Error(`UncompressedSize (${uncompressedSize}) !== out.length (${this.inputSize * mainType.BYTES_PER_ELEMENT})`);
         }
-        if(Number(dataInfo[2]) === 1){//is Float32Array
+        if (Number(dataInfo[2]) === 1) { //is Float32Array
             return new mainType(this.buf.buffer, this.buf.byteOffset, uncompressedSize / mainType.BYTES_PER_ELEMENT);
         }
         else {

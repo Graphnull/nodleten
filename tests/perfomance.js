@@ -1,6 +1,5 @@
 let tf = require('@tensorflow/tfjs')
-let data = require('./data')
-let { Dataset, zip } = require('./../src/dataset')
+let { Dataset } = require('./../src/dataset')
 
 let inpSize = 190000
 async function trainModel() {
@@ -67,7 +66,7 @@ async function trainModel() {
 
 
     console.log('time', new Date() - time);
-    const xyDataset = zip({ xs: xDataset, ys: yDataset })
+    const xyDataset = tf.data.zip({ xs: xDataset.generator(), ys: yDataset.generator() })
     // .batch(4)
     // .shuffle(4);
 
@@ -90,4 +89,7 @@ async function trainModel() {
   }
   // setInterval(()=>{},1000)
 }
-trainModel();
+trainModel().catch(err => {
+  console.log(err);
+  process.exit(1)
+});

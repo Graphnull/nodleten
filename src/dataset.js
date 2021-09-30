@@ -18,13 +18,17 @@ var __importStar = (this && this.__importStar) || function (mod) {
     __setModuleDefault(result, mod);
     return result;
 };
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.zip = exports.openDataset = exports.Dataset = exports.parseHeaderBuffer = exports.DataTypeMap = exports.TFTypes = exports.acceptableTypedArrays = exports.ReTYPEIDS = exports.TYPEIDS = void 0;
+exports.openDataset = exports.Dataset = exports.parseHeaderBuffer = exports.DataTypeMap = exports.TFTypes = exports.acceptableTypedArrays = exports.ReTYPEIDS = exports.TYPEIDS = void 0;
 const tfCore = __importStar(require("@tensorflow/tfjs-core"));
 const path = __importStar(require("path"));
 const fs = __importStar(require("fs"));
 const lz4 = __importStar(require("lz4"));
 const worker_threads_1 = require("worker_threads");
+const lodash_clonedeep_1 = __importDefault(require("lodash.clonedeep"));
 let uniqueId = 0;
 exports.TYPEIDS = {
     'Float32Array': 1,
@@ -139,6 +143,10 @@ class Dataset {
             };
             this.worker.on('message', onMessage);
         });
+        this.generator = this.generator.bind(this);
+    }
+    _clone() {
+        return Object.assign(Object.create(Object.getPrototypeOf(this)), this);
     }
     async _sendCommand(op, data, transferableObjects) {
         let commandId = uniqueCommandId++;
@@ -166,6 +174,31 @@ class Dataset {
         this.list.push(this.worker.dataI++);
         let clone = objs.slice(0);
         return this._sendCommand('push', clone, [clone.buffer]);
+    }
+    repeat(count) {
+        let newDataset = this._clone();
+        let res = [];
+        for (let i = 0; i < count; i++) {
+            res = res.concat(newDataset.list);
+        }
+        newDataset.list = res;
+        return newDataset;
+    }
+    skip(count) {
+        let newDataset = lodash_clonedeep_1.default(this);
+        newDataset.list = newDataset.list.slice(count);
+        return newDataset;
+    }
+    take(count) {
+        let newDataset = lodash_clonedeep_1.default(this);
+        newDataset.list = newDataset.list.slice(0, count);
+        return newDataset;
+    }
+    async *generator() {
+        for (let i = 0; i !== this.list.length; i++) {
+            let out = await this.get(this.list[i]);
+            yield tfCore.tensor(out, [1].concat(this.shape));
+        }
     }
     send(objs) {
         if (exports.acceptableTypedArrays.indexOf(objs.constructor.name) < 0) {
@@ -227,127 +260,3 @@ async function openDataset(name) {
     return dataset;
 }
 exports.openDataset = openDataset;
-class Zip {
-    constructor(datasets) {
-        this.datasets = datasets;
-        this.firstDataset = Object.values(datasets)[0];
-        if (!this.firstDataset) {
-            throw new Error('dataset not found');
-        }
-        this.keys = Object.keys(datasets);
-        this.prefetches = {};
-        this.keys.forEach(key => {
-            this.prefetches[key] = [];
-            let dataset = this.datasets[key];
-        });
-    }
-    batch() { throw new Error('not implemented'); }
-    concatenate() { throw new Error('not implemented'); }
-    filter() { throw new Error('not implemented'); }
-    map() { throw new Error('not implemented'); }
-    mapAsync() { throw new Error('not implemented'); }
-    prefetch() { throw new Error('not implemented'); }
-    repeat() { throw new Error('not implemented'); }
-    shuffle() { throw new Error('not implemented'); }
-    skip() { throw new Error('not implemented'); }
-    take() { throw new Error('not implemented'); }
-    toArray() { throw new Error('not implemented'); }
-    async forEachAsync(func) {
-        let list = this.firstDataset.list;
-        for (let i = 0; i !== list.length; i++) {
-            let typedArrays = {};
-            for (let k = 0; k !== this.keys.length; k++) {
-                let key = this.keys[k];
-                typedArrays[key] = await this.datasets[key].get(this.datasets[key].list[i]);
-            }
-            let out = {};
-            tfCore.tidy(() => {
-                for (let k = 0; k !== this.keys.length; k++) {
-                    let key = this.keys[k];
-                    out[key] = tfCore.tensor(typedArrays[key], [1].concat(this.datasets[key].shape));
-                }
-                func(out);
-            });
-        }
-    }
-    async iterator() {
-        let i = 0;
-        let count = this.firstDataset.list.length;
-        return {
-            next: async () => {
-                if (count === i) {
-                    return { value: null, done: true };
-                }
-                let results = {};
-                let getingDatas = this.keys.map(async (key) => {
-                    //check prefetch data
-                    let prefetchLine = this.prefetches[key];
-                    let prefetch = prefetchLine.find(prefetch => prefetch.i === this.datasets[key].list[i]);
-                    if (prefetch) {
-                        if (prefetch.data) {
-                            results[key] = prefetch.data;
-                        }
-                        else {
-                            results[key] = await prefetch.promise;
-                        }
-                    }
-                    else {
-                        results[key] = await this.datasets[key].get(this.datasets[key].list[i]);
-                    }
-                });
-                await Promise.all(getingDatas);
-                const prefetchSize = 9;
-                //start prefetch for all datasets
-                for (let k = 0; k !== this.keys.length; k++) {
-                    let key = this.keys[k];
-                    let ids = this.datasets[key].list.slice(i + 1, i + 1 + prefetchSize);
-                    this.prefetches[key] = this.prefetches[key].filter(prefetch => {
-                        let prefetchExist = ids.findIndex(id => id === prefetch.i);
-                        if (prefetchExist > -1) {
-                            ids[prefetchExist] = -1;
-                        }
-                        return prefetchExist > -1;
-                    });
-                    ids = ids.filter(id => id !== -1);
-                    for (let ni = 0; ni !== ids.length; ni++) {
-                        let i = ids[ni];
-                        let prefetch = {
-                            i,
-                            promise: this.datasets[key].get(i)
-                                .then(data => {
-                                return prefetch.data = data;
-                            })
-                        };
-                        this.prefetches[key].push(prefetch);
-                    }
-                }
-                let out = {};
-                for (let k = 0; k !== this.keys.length; k++) {
-                    let key = this.keys[k];
-                    out[key] = tfCore.tensor(results[key], [1].concat(this.datasets[key].shape)); // this.tensorBuffers[key].toTensor();
-                }
-                i++;
-                return { value: out, done: false };
-            }
-        };
-    }
-}
-/**
- * Create a Dataset by zipping dict
- *
- * Example:
- * ```
- * const xDataset = new Dataset({shape:[100, 100]})
- * const yDataset = new Dataset({shape:[1]})
- *
- * const xyDataset = zip({xs: xDataset, ys: yDataset})
- *
- * model.fitDataset(xyDataset, {});
- * ```
- * @param {[key]:Dataset}
- * @returns Zip
- */
-function zip(objects) {
-    return new Zip(objects);
-}
-exports.zip = zip;

@@ -1,6 +1,5 @@
 let tf = require('@tensorflow/tfjs-node')
-let data = require('./data')
-let { Dataset, zip, openDataset } = require('./../src/dataset')
+let { Dataset, openDataset } = require('./../src/dataset')
 let fs = require('fs')
 
 
@@ -58,6 +57,17 @@ async function test() {
     if (!(fs.statSync('./test.ndlt').size > 0)) {
         throw new Error('test.ndlt file small')
     }
+
+    if (dataset.skip(100).list.length !== (dataset.list.length - 100)) {
+        throw new Error('Skip not work')
+    }
+    if (dataset.take(100).list.length !== 100) {
+        throw new Error('take not work')
+    }
+    if (dataset.repeat(2).list.length !== (dataset.list.length * 2)) {
+        throw new Error('repeat not work')
+    }
+
     console.log('success')
     dataset.destroy();
 
@@ -75,46 +85,39 @@ async function test() {
     dataset.destroy(true);
 
     var normalDataset;
-    try{
-        normalDataset = new Dataset({name:'normal', shape:[768, 1024,3]});
+    try {
+        normalDataset = new Dataset({ name: 'normal', shape: [768, 1024, 3] });
         await normalDataset.push(new Uint8Array(10))
         throw new Error('not')
-    }catch(err){
-        if(err.message==='not'){
+    } catch (err) {
+        if (err.message === 'not') {
             throw new Error('Not acceptable lenght')
         }
     }
 
-    await normalDataset.push(Buffer.alloc(768*1024*3));
-
-    let normZip = zip({xs:normalDataset, ys: normalDataset})
-    await normZip.forEachAsync((data)=>{console.log(data)})
+    normalDataset.push(Buffer.alloc(768 * 1024 * 3));
+    normalDataset.push(Buffer.alloc(768 * 1024 * 3));
     let loss = (result, output, mask, hit) => {
-        let start = result.shape.map(v=>0)
-        start[start.length-3] = start[start.length-2] = 2
-        let end = result.shape.map(v=>v)
-        end[end.length-2] = end[end.length-2] - 4
-        end[end.length-3] = end[end.length-3] - 4
+        let start = result.shape.map(v => 0)
+        start[start.length - 3] = start[start.length - 2] = 2
+        let end = result.shape.map(v => v)
+        end[end.length - 2] = end[end.length - 2] - 4
+        end[end.length - 3] = end[end.length - 3] - 4
 
         return tf.pow(result.sub(output), 2)
-        .slice(start, end)
-        .mean();
-      }
-      
+            .slice(start, end)
+            .mean();
+    }
     let optimizer = tf.train.adadelta(0.03);
 
 
     const input = tf.input({ shape: [768, 1024, 3] });
-    const drop = tf.layers.dropout({ rate:0.05 }).apply(input);
-    const conv = tf.layers.conv2d({ filters: 3, kernelSize: [1,1], activation: 'elu', padding: 'same' }).apply(drop);
+    const drop = tf.layers.dropout({ rate: 0.05 }).apply(input);
+    const conv = tf.layers.conv2d({ filters: 3, kernelSize: [1, 1], activation: 'elu', padding: 'same' }).apply(drop);
     var model = tf.model({ inputs: input, outputs: conv })
 
-    model.compile({optimizer, loss });
+    model.compile({ optimizer, loss });
 
-    await model.fitDataset(normZip, {
-        epochs:1,
-        callbacks: {onEpochEnd: (epoch, logs) => {console.log( 'onEnd',epoch, logs.loss)}}
-    });
 
     normalDataset.destroy(true)
 }

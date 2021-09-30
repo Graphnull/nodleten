@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc",
     "docs": "typedoc --out docs src/index.ts",
-    "test": "npm run build && cd tests && node write-read && node perfomance",
+    "test": "npm run build && cd tests && node write-read && node perfomance && node opticatFlowKernels",
     "testDiode": "npm run build && cd tests && node diode"
   },
   "repository": {
@@ -21,9 +21,12 @@
   "homepage": "https://github.com/Graphnull/nodleten#readme",
   "dependencies": {
     "@tensorflow/tfjs-core": "^3.7.0",
+    "lodash.clonedeep": "^4.5.0",
     "lz4": "^0.6.5"
   },
   "devDependencies": {
+    "@types/lodash.clonedeep": "^4.5.6",
+    "@types/node": "^15.12.2",
     "typedoc": "^0.20.36",
     "typescript": "4.2.4"
   }
